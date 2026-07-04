@@ -9,18 +9,19 @@
 // The application. Shared verbatim between the esp32 and native build
 // targets -- only the concrete IGps/ITouch/ITileStore drivers and the
 // Adafruit_GFX sink handed in differ.
-class App {
+class App
+{
 public:
-    App(Adafruit_GFX& gfx, IGps& gps, ITouch& touch, ITileStore& tiles);
+    App(Adafruit_GFX &gfx, IGps &gps, ITouch &touch, ITileStore &tiles);
 
     void begin();
     void tick(uint32_t now_ms);
 
 private:
-    Adafruit_GFX& _gfx;
-    IGps&         _gps;
-    ITouch&       _touch;
-    ITileStore&   _tiles;
+    Adafruit_GFX &_gfx;
+    IGps &_gps;
+    ITouch &_touch;
+    ITileStore &_tiles;
 
     uint32_t _lastMapDraw = 0;
 
@@ -28,4 +29,8 @@ private:
     // on (lat, lon): the user stays fixed at the center and the map scrolls
     // beneath them.
     void drawMap(double lat, double lon);
+
+    // Draws a representation of the current position on the line with
+    // Last, current and next stops shown as dots. The users progress is then shown as a green segment.
+    void drawLine();
 };

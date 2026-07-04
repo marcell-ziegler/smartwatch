@@ -3,6 +3,9 @@
 
 // Chosen tile zoom level
 #define ZOOM 13
+#define MARGIN_X 5
+#define MARGIN_Y 5
+#define BASE_TEXT_SIZE 1
 
 namespace
 {
@@ -33,6 +36,7 @@ void App::begin()
     _gps.begin();
     _gfx.setRotation(0); // landscape
     _gfx.fillScreen(0x0000);
+    _gfx.setTextColor(0xFFFF);
 }
 
 void App::tick(uint32_t now_ms)
