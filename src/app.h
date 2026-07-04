@@ -21,4 +21,11 @@ private:
     IGps&         _gps;
     ITouch&       _touch;
     ITileStore&   _tiles;
+
+    uint32_t _lastMapDraw = 0;
+
+    // Draws the map square in the top-right corner of the screen, centered
+    // on (lat, lon): the user stays fixed at the center and the map scrolls
+    // beneath them.
+    void drawMap(double lat, double lon);
 };
