@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <optional>
 #include "ClockTime.h"
 
 // Denotes wether the stop is mandatory for the given station.
@@ -56,7 +57,9 @@ enum Role
 struct Stop
 {
     std::string stationSignature;
-    ClockTime arrival, departure;
+    // Either may be absent: some stations list only a departure, some list
+    // neither (an empty CSV cell parses to nullopt).
+    std::optional<ClockTime> arrival, departure;
     StopType stopType;
     ExchangeType exchangeType;
     // I.e. "Bevakad"
@@ -110,3 +113,60 @@ struct SeasonalTimetableRule
     // What category is to be used on the given weekday.
     std::string trafficCategory;
 };
+
+// ---------------------------------------------------------------------------
+//  Low-level text helpers (no timetable knowledge).
+// ---------------------------------------------------------------------------
+namespace utils
+{
+    // Split one CSV line into fields on `delim`, honouring "double quotes"
+    // and the "" escape for a literal quote inside a quoted field.
+    std::vector<std::string> splitCsvLine(const std::string &line, char delim = ',');
+
+    // Split file content into lines, tolerating both LF and CRLF endings.
+    // A final line without a trailing newline is still returned.
+    std::vector<std::string> splitLines(const std::string &content);
+
+    // Parse a whole decimal string into a uint16_t. Requires the ENTIRE
+    // string to be digits (no leading/trailing junk); nullopt otherwise.
+    std::optional<uint16_t> parseUint16(const std::string &s);
+
+    // Parse "H:MM"/"HH:MM" into a validated wall-clock time.
+    std::optional<ClockTime> parseClockTime(const std::string &s);
+
+    // Same as parseClockTime but yields minutes-since-midnight. Kept for
+    // callers that want the raw integer.
+    std::optional<uint16_t> parseTimeToMinutes(const std::string &s);
+}
+
+// ---------------------------------------------------------------------------
+//  Field converters (string token <-> enum) and derived values.
+// ---------------------------------------------------------------------------
+std::optional<VehicleType> parseVehicleType(const std::string &s);
+std::optional<Direction> parseDirection(const std::string &s);
+std::optional<StopType> parseStopType(const std::string &s);
+std::optional<ExchangeType> parseExchangeType(const std::string &s);
+std::optional<bool> parseBool(const std::string &s);
+
+// Role is derived from the shift number's tens digit (1x=Forare,
+// 3x=Tagbefalhavare, 4x=Konduktor); nullopt for any other range.
+std::optional<Role> roleForShiftNumber(int number);
+
+// ---------------------------------------------------------------------------
+//  Per-file record parsers. Each takes the whole file's contents and returns
+//  the parsed records, or nullopt if ANY data row is malformed. Blank lines
+//  and lines whose first non-space char is '#' are ignored (so you can label
+//  columns with a leading '#' comment, matching assets/tracks/demo.csv);
+//  there is no header row.
+//
+//  Column schemas (see the timetable data-model discussion):
+//    seasons.csv : validFrom,validTo,dayOfWeek,category
+//    shifts.csv  : number,category,trainNumbers            (';'-separated)
+//    trains.csv  : number,vehicleType,direction,nextNumber (roster; no stops)
+//    stops.csv   : stationSignature,arrival,departure,stopType,exchangeType,
+//                  staffed,meets,remark                    (meets ';'-separated)
+// ---------------------------------------------------------------------------
+std::optional<std::vector<SeasonalTimetableRule>> parseSeasonsCsv(const std::string &content);
+std::optional<std::vector<Shift>> parseShiftsCsv(const std::string &content);
+std::optional<std::vector<Train>> parseTrainsCsv(const std::string &content);
+std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content);
