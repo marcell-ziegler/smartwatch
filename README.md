@@ -14,8 +14,10 @@ unchanged on:
 
 ```
 platformio.ini            two [env] blocks; src filters pick target files
-include/hal/               IGps / ITouch / ITileStore  — the three seams
+include/hal/               IGps / ITouch / ITileStore / ITimeTableStore — the seams
 src/app.{h,cpp}            SHARED app: map view; slippy-map math + tile blitting
+src/timetable.{h,cpp}      SHARED timetable data model + CSV parsers
+include/ClockTime.h        wall-clock time-of-day type (wraps at midnight)
 src/main_native.cpp        desktop entry (SDL loop)      [native only]
 src/main_esp32.cpp         hardware entry (real drivers) [esp32 only]
 src/native/                PCDisplay glue, mocks, Arduino shim [native only]
@@ -80,6 +82,84 @@ python3 tools/png_to_bin.py <png_tile_dir> assets/tiles
 list of lat/lon waypoints falls into, e.g. to sanity-check the MOBAC atlas
 covers the intended ribbon. The checked-in `assets/tiles/` (zoom 13, from
 `assets/Lennakatten.mbtiles`) is the demo route used with `demo.csv`.
+
+## Timetable data
+
+Timetable data is stored as plain CSV — human-readable and hand-editable on the
+SD card — one file per unique train. `ITimeTableStore::readFile()` is the read
+side (a folder on desktop, an SD card on hardware); it just returns raw file
+bytes. Parsing into the data model (`Stop`, `Train`, `Timetable`, `Shift`,
+`SeasonalTimetableRule`) lives in `src/timetable.{h,cpp}` and is shared by both
+targets — pure C++, no HAL or Adafruit dependency.
+
+The device only ever loads the *one* category running on a given day: pick a
+shift → its category → load that category's directory into RAM (a season's
+worth is tens of KB, well within budget). A category holds ~18 trains at most,
+so lookups are simple linear scans.
+
+### Directory layout
+
+```
+timetables/
+  seasons.csv          which category runs on which dates / weekdays
+  shifts.csv           the shift catalog across all categories
+  A/                   one directory per traffic category (A, B, D, ...)
+    trains.csv         roster: every train in this category
+    70.csv             one file per train, named <number>.csv
+    91Y.csv
+    ...
+  B/
+    ...
+```
+
+`trains.csv` is the authoritative index of which per-train files exist; the
+loader opens each `<number>.csv` it lists rather than scanning the directory, so
+a roster/file mismatch surfaces as a clear error.
+
+### Column schemas
+
+Each row is one record; columns are comma-separated. There is **no header row** —
+label columns with a leading `#` comment instead (blank and `#` lines are
+skipped, matching `assets/tracks/demo.csv`). CRLF and LF line endings are both
+accepted. Sub-lists within a field (train lists, meets) are `;`-separated.
+
+```
+seasons.csv   validFrom,validTo,dayOfWeek,category
+              # ISO dates (inclusive); dayOfWeek 1-7 (Mon-Sun)
+              2026-06-01,2026-08-31,3,A
+
+shifts.csv    number,category,trainNumbers
+              # number's tens digit -> role: 1x Förare, 3x Tågbefälhavare,
+              # 4x Konduktör. trainNumbers is ;-separated, in work order.
+              31,A,70;71;74;75
+
+trains.csv    number,vehicleType,direction,nextNumber
+              # nextNumber = train continuing on the same set (may be empty)
+              70,BigSteam,Down,71
+
+<number>.csv  station,arrival,departure,stopType,exchangeType,staffed,meets,remark
+              # one row per station called at, in order
+              Uö,08:00,08:05,Mandatory,Embarking,true,62;91Y,"Meet 62 here"
+```
+
+Accepted field tokens (matched case-insensitively):
+
+- `vehicleType`: `BigSteam` `SmallSteam` `Diesel` `Railbus`
+- `direction`: `Up` (toward Uppsala, increasing km) · `Down` (toward Faringe)
+- `stopType`: `Mandatory` `Optional`
+- `exchangeType`: `Embarking` `Disembarking` `EmbarkingAndDisembarking` `None`
+- `staffed`: `true`/`false` (also `1`/`0`, `yes`/`no`)
+- times: `H:MM` or `HH:MM`, validated (hour < 24, minute < 60). `arrival` and
+  `departure` are each optional — leave the cell **empty** for a station with
+  no such time (some list only a departure, some neither). An empty cell parses
+  to an absent time; a non-empty but malformed one is still an error.
+
+A malformed row (wrong column count, bad token, out-of-range time) fails the
+whole file's parse — the prep step should validate on the desktop before the
+card ever reaches the device.
+
+> **Open item:** the `loadCategory` assembly step (roster + per-train stops →
+> `Timetable`) isn't written yet.
 
 ## `src/app.{h,cpp}`
 
