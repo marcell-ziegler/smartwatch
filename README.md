@@ -14,14 +14,17 @@ unchanged on:
 
 ```
 platformio.ini            two [env] blocks; src filters pick target files
-include/hal/              IGps / ITouch / ITileStore  — the three seams
-src/app.{h,cpp}           SHARED app: layout, slippy-map math, overlay logic
-src/main_native.cpp       desktop entry (SDL loop)      [native only]
-src/main_esp32.cpp        hardware entry (real drivers) [esp32 only]
-src/native/               PCDisplay glue, mocks, Arduino shim [native only]
-lib/pcdisplay/            PCDisplay: Adafruit_GFX -> SDL2 window
-tools/png_to_bin.py       OSM PNG tiles -> RGB565 .bin (offline)
-assets/tracks/demo.csv    sample GPS replay track
+include/hal/               IGps / ITouch / ITileStore  — the three seams
+src/app.{h,cpp}            SHARED app: map view; slippy-map math + tile blitting
+src/main_native.cpp        desktop entry (SDL loop)      [native only]
+src/main_esp32.cpp         hardware entry (real drivers) [esp32 only]
+src/native/                PCDisplay glue, mocks, Arduino shim [native only]
+lib/pcdisplay/              PCDisplay: Adafruit_GFX -> SDL2 window
+tools/tile_calc.py         lat/lon -> z/x/y tile coords, for picking a ribbon
+tools/mbtiles_to_png.py    unpack a MOBAC .mbtiles atlas -> z/x/y.png tree
+tools/png_to_bin.py        z/x/y.png tree -> z/x/y.bin RGB565 tiles
+assets/tracks/demo.csv     sample GPS replay track
+assets/Lennakatten.mbtiles source atlas for the current demo tile ribbon
 assets/tiles/<z>/<x>/<y>.bin   pre-converted raster tiles
 ```
 
@@ -60,20 +63,44 @@ pio device monitor        # 115200 baud
 ## Tiles
 
 Both targets read 256×256 tiles as raw little-endian RGB565 (`.bin`, 131072 B) at
-`<z>/<x>/<y>.bin`, so neither needs a PNG decoder. Convert offline with
-`tools/png_to_bin.py`. For a fixed heritage line, only convert the thin ribbon of
-tiles your traced route crosses at your chosen zoom — not a whole region.
-`ITileStore::loadTile()` is the read side (`FolderTileStore` on desktop, an SD
-card on hardware); blitting tiles into a map view is app logic, not harness.
+`<z>/<x>/<y>.bin`, so neither needs a PNG decoder. `ITileStore::loadTile()` is
+the read side (`FolderTileStore` on desktop, an SD card on hardware); blitting
+tiles into the map view is app logic, not harness.
+
+To produce a tile set: export a MOBAC atlas in "MBTiles" format for the thin
+ribbon of tiles your traced route crosses at your chosen zoom (not a whole
+region), then:
+
+```
+python3 tools/mbtiles_to_png.py <atlas.mbtiles> <png_tile_dir>
+python3 tools/png_to_bin.py <png_tile_dir> assets/tiles
+```
+
+`tools/tile_calc.py` is a scratch helper for working out which z/x/y tiles a
+list of lat/lon waypoints falls into, e.g. to sanity-check the MOBAC atlas
+covers the intended ribbon. The checked-in `assets/tiles/` (zoom 13, from
+`assets/Lennakatten.mbtiles`) is the demo route used with `demo.csv`.
 
 ## `src/app.{h,cpp}`
 
-This is intentionally a bare stub: `App::begin()` brings the peripherals up
-(`ITileStore::begin()`, `ITouch::begin()`, `IGps::begin()`, rotation, a
-cleared screen) and `App::tick()` just pumps `IGps::update()` and polls
-`ITouch::get()`. Everything else — layout, the slippy-map math, timetable
-display, route/station overlays — is the actual application and is left for
-you to build on top of the three HAL interfaces in `include/hal/`.
+`App::begin()` brings the peripherals up (`ITileStore::begin()`,
+`ITouch::begin()`, `IGps::begin()`, rotation, a cleared screen). `App::tick()`
+pumps `IGps::update()`, polls `ITouch::get()`, and — throttled to 1 Hz —
+redraws the map.
+
+Currently implemented:
+- **`drawMap()`** — a 120×120 map square pinned to the top-right corner,
+  centered on the live GPS fix (Web Mercator projection, see
+  `lonLatToWorldPx()`). The user stays fixed at the center of the square and
+  the map scrolls beneath them as tiles are blitted in and clipped to the
+  panel; a filled circle marks the user's position.
+
+Still a stub:
+- **`drawLine()`** — declared in `app.h` but not yet implemented. Intended to
+  show the user's progress along the railway line: last/current/next stops as
+  dots, with the completed segment drawn in green.
+
+Touch input (`ITouch::get()`) is polled each tick but not yet acted on.
 
 ## Note on the native GFX build
 
@@ -93,3 +120,4 @@ otherwise flags this vendored copy (and the registry package, if you ever
 switch back) as "framework incompatible" under the framework-less `native`
 platform. If you re-vendor from a newer `Adafruit_GFX` release, diff against
 upstream to see whether those two includes still need dropping.
+</content>
