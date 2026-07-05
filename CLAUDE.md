@@ -192,10 +192,13 @@ rule; special/event days get their own single-day category + directory.
 
 **Implemented & tested:** map rendering (`drawMap`); `ClockTime`; all timetable
 data structures; all CSV parsers (`parseSeasonsCsv`, `parseShiftsCsv`,
-`parseTrainsCsv`, `parseStopsCsv`) + field converters; `Timetable::findTrain`.
-Both `pio run -e native` and `-e esp32` build clean. Some real B-traffic data
-is entered (`assets/timetables/`): `seasons.csv`, `shifts.csv`, `B/trains.csv`,
-`B/80.csv` are populated and parse; the rest are empty placeholders.
+`parseTrainsCsv`, `parseStopsCsv`) + field converters; `Timetable::findTrain`;
+cross-record validators (`isValidIsoDate`, `validateSeasons`, `validateShifts`,
+`validateTimetable` — season date-range/overlap/exclusivity with inclusive
+endpoints, and train/shift/station uniqueness + meet/nextNumber referential
+integrity). Covered by the `tests/` suite (see conventions below). Both `pio
+run -e native` and `-e esp32` build clean. Real B-traffic data is being entered
+by hand in `assets/timetables/`; the user is actively filling per-train files.
 
 **Stubbed / not yet done:**
 - `App::drawLine()` — declared, empty. Intended: progress along the line
@@ -238,6 +241,15 @@ is entered (`assets/timetables/`): `seasons.csv`, `shifts.csv`, `B/trains.csv`,
   building *both* envs and (for logic) a throwaway `g++ -std=gnu++17` test in
   the scratch dir with real assertions. Temporary demo code / synthetic test
   assets are removed afterward; don't leave them in `src/` or `assets/`.
+- **Unit tests live in `tests/`** (a plain-g++ suite, *not* `test/` — that name
+  is reserved by PlatformIO's `pio test`). Run with `make -C tests` (or `cd
+  tests && make`). It compiles `tests/*.cpp` + `src/timetable.cpp` (pure logic,
+  no HAL/Arduino/SDL) into `tests/run_tests`, and returns non-zero on any
+  failure. `tests/framework.h` is a tiny dependency-free CHECK harness that
+  reports *every* failing case (doesn't abort on first). Covers `ClockTime`,
+  the CSV/text utils, time parsing, enum converters, all four record parsers
+  (valid + malformed rows), the cross-record validators, and `findTrain`. Add
+  to it whenever you touch `timetable.{h,cpp}` or `ClockTime.h`.
 - **Don't commit unless asked.** The user drives git and commits frequently
   with short messages. `main` is the working branch. `.pio/` and most
   `.vscode/` are gitignored.
