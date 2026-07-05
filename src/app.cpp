@@ -1,5 +1,8 @@
 #include "app.h"
+#include "ui.h"
+#include "timetable.h"
 #include <math.h>
+#include <stdio.h>
 
 // Chosen tile zoom level
 #define ZOOM 13
@@ -14,6 +17,18 @@ namespace
     constexpr int16_t MAP_H = 120;
     constexpr uint16_t MARKER_COLOR = 0x001F; // blue, RGB565
 
+    constexpr uint16_t BLACK = 0x0000;
+    constexpr uint16_t WHITE = 0xFFFF;
+
+    // Menu actions, in display order.
+    const char *const MENU_ITEMS[] = {"Resume", "Change shift"};
+    constexpr int MENU_COUNT = (int)(sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]));
+
+    // Shared list layout.
+    constexpr int16_t LIST_TOP = 34;
+    constexpr int16_t BTN_H = 24;
+    constexpr int16_t BTN_GAP = 4;
+
     // lat/lon -> world pixel position at the given zoom (Web Mercator). This is
     // a continuous coordinate space -- tile (z,x,y) is just the TILE_PX-sized
     // chunk of it at [x*TILE_PX, y*TILE_PX].
@@ -26,30 +41,293 @@ namespace
     }
 } // namespace
 
-App::App(Adafruit_GFX &gfx, IGps &gps, ITouch &touch, ITileStore &tiles)
-    : _gfx(gfx), _gps(gps), _touch(touch), _tiles(tiles) {}
+App::App(Adafruit_GFX &gfx, IGps &gps, ITouch &touch, ITileStore &tiles,
+         IButtons &buttons, ITimeTableStore &timetables)
+    : _gfx(gfx), _gps(gps), _touch(touch), _tiles(tiles), _buttons(buttons),
+      _timetables(timetables) {}
 
 void App::begin()
 {
     _tiles.begin();
     _touch.begin();
     _gps.begin();
-    _gfx.setRotation(0); // landscape
-    _gfx.fillScreen(0x0000);
-    _gfx.setTextColor(0xFFFF);
+    _buttons.begin();
+    _timetables.begin();
+    _gfx.setRotation(0);
+    _gfx.fillScreen(BLACK);
+
+    loadShiftSuggestions();
+
+    _dirty = true; // force the first paint on the next tick()
+}
+
+void App::loadShiftSuggestions()
+{
+    _shifts.clear();
+    _shiftIndex = 0;
+
+    std::string seasonsRaw, shiftsRaw;
+    if (!_timetables.readFile("seasons.csv", seasonsRaw) ||
+        !_timetables.readFile("shifts.csv", shiftsRaw))
+        return; // no data -> empty list (screen shows a placeholder)
+
+    auto seasons = parseSeasonsCsv(seasonsRaw);
+    auto shifts = parseShiftsCsv(shiftsRaw);
+    if (!seasons || !shifts)
+        return; // malformed data -> empty list
+
+    // Resolve today's category from the clock; if the clock has no valid date
+    // (e.g. GPS cold start) fall back to listing every shift so the user can
+    // still pick manually.
+    const GpsClock c = _gps.clock();
+    std::optional<std::string> category;
+    if (c.valid)
+        category = categoryForDate(*seasons, c.year, c.month, c.day);
+
+    for (const auto &s : *shifts)
+    {
+        if (category && s.trafficCategory != *category)
+            continue;
+        _shifts.push_back(std::to_string(s.number) + s.trafficCategory);
+    }
 }
 
 void App::tick(uint32_t now_ms)
 {
     _gps.update();
-    TouchPoint tp = _touch.get();
-    (void)tp;
+    (void)_touch.get(); // polled but not acted on yet
+
+    // Drain every button press queued since the last tick.
+    while (auto ev = _buttons.poll())
+        handleButton(*ev);
+
+    render(now_ms);
+}
+
+// ---------------------------------------------------------------------------
+//  State machine
+// ---------------------------------------------------------------------------
+void App::setState(AppState next)
+{
+    if (next == _state)
+        return;
+    if (next == AppState::ShiftSelection)
+        loadShiftSuggestions(); // refresh for the current day on re-entry
+    _state = next;
+    _dirty = true;
+}
+
+void App::handleButton(Button b)
+{
+    switch (_state)
+    {
+    case AppState::ShiftSelection:
+        handleShiftSelectionButton(b);
+        break;
+    case AppState::Menu:
+        handleMenuButton(b);
+        break;
+    case AppState::MainView:
+        handleMainViewButton(b);
+        break;
+    }
+}
+
+void App::handleShiftSelectionButton(Button b)
+{
+    const int n = (int)_shifts.size();
+    switch (b)
+    {
+    case Button::Up:
+        if (n > 0)
+        {
+            _shiftIndex = (_shiftIndex - 1 + n) % n;
+            _dirty = true;
+        }
+        break;
+    case Button::Down:
+        if (n > 0)
+        {
+            _shiftIndex = (_shiftIndex + 1) % n;
+            _dirty = true;
+        }
+        break;
+    case Button::Select:
+        if (n > 0)
+        {
+            _selectedShift = _shifts[_shiftIndex];
+            // TODO: load the chosen shift's category Timetable (loadCategory)
+            // for MainView to display timetable/meets.
+            setState(AppState::MainView);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void App::handleMenuButton(Button b)
+{
+    switch (b)
+    {
+    case Button::Up:
+        _menuIndex = (_menuIndex - 1 + MENU_COUNT) % MENU_COUNT;
+        _dirty = true;
+        break;
+    case Button::Down:
+        _menuIndex = (_menuIndex + 1) % MENU_COUNT;
+        _dirty = true;
+        break;
+    case Button::Select:
+        if (_menuIndex == 0)
+            setState(AppState::MainView);   // Resume
+        else
+            setState(AppState::ShiftSelection); // Change shift
+        break;
+    default:
+        break;
+    }
+}
+
+void App::handleMainViewButton(Button b)
+{
+    if (b == Button::Select)
+    {
+        _menuIndex = 0;
+        setState(AppState::Menu);
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Rendering
+// ---------------------------------------------------------------------------
+void App::render(uint32_t now_ms)
+{
+    const bool wasDirty = _dirty;
+
+    switch (_state)
+    {
+    case AppState::ShiftSelection:
+        renderShiftSelection();
+        break;
+    case AppState::Menu:
+        renderMenu();
+        break;
+    case AppState::MainView:
+        renderMainView(now_ms);
+        break;
+    }
+
+    // Clock overlay: redraw when the second changes (or after a full repaint
+    // wiped it). Reading the clock every tick is cheap on both targets.
+    const GpsClock c = _gps.clock();
+    const int sec = c.valid ? (int)c.second : -1;
+    if (wasDirty || sec != _lastClockSec)
+    {
+        _lastClockSec = sec;
+        drawClock(c);
+    }
+}
+
+void App::drawClock(const GpsClock &c)
+{
+    char buf[16];
+    if (c.valid)
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", c.hour, c.minute, c.second);
+    else
+        snprintf(buf, sizeof(buf), "--:--:--");
+
+    // "HH:MM:SS" at text size 2 == 8 * 12 px wide, 16 px tall.
+    constexpr int16_t clockW = 8 * 12;
+    constexpr int16_t clockH = 16;
+    const int16_t x = _gfx.width() - clockW - MARGIN_X;
+    const int16_t y = (_state == AppState::MainView)
+                          ? _gfx.height() - clockH - MARGIN_Y // below the map
+                          : MARGIN_Y;                         // top-right in menus
+
+    _gfx.fillRect(x, y, clockW, clockH, BLACK);
+    _gfx.setTextSize(2);
+    _gfx.setTextColor(WHITE);
+    _gfx.setCursor(x, y);
+    _gfx.print(buf);
+    _gfx.setTextSize(BASE_TEXT_SIZE);
+}
+
+void App::renderShiftSelection()
+{
+    if (!_dirty)
+        return;
+    _dirty = false;
+
+    const int16_t w = _gfx.width();
+    _gfx.fillScreen(BLACK);
+    _gfx.setTextColor(WHITE);
+    _gfx.setTextSize(2);
+    _gfx.setCursor(MARGIN_X, MARGIN_Y);
+    _gfx.print("Select shift");
+
+    if (_shifts.empty())
+    {
+        _gfx.setTextSize(1);
+        _gfx.setCursor(MARGIN_X, LIST_TOP);
+        _gfx.print("No shifts for today");
+        return;
+    }
+
+    int16_t y = LIST_TOP;
+    for (int i = 0; i < (int)_shifts.size(); ++i)
+    {
+        drawButton(_gfx, MARGIN_X, y, w - 2 * MARGIN_X, BTN_H,
+                   _shifts[i].c_str(), i == _shiftIndex);
+        y += BTN_H + BTN_GAP;
+    }
+}
+
+void App::renderMenu()
+{
+    if (!_dirty)
+        return;
+    _dirty = false;
+
+    const int16_t w = _gfx.width();
+    _gfx.fillScreen(BLACK);
+    _gfx.setTextColor(WHITE);
+    _gfx.setTextSize(2);
+    _gfx.setCursor(MARGIN_X, MARGIN_Y);
+    _gfx.print("Menu");
+
+    int16_t y = LIST_TOP;
+    for (int i = 0; i < MENU_COUNT; ++i)
+    {
+        drawButton(_gfx, MARGIN_X, y, w - 2 * MARGIN_X, BTN_H,
+                   MENU_ITEMS[i], i == _menuIndex);
+        y += BTN_H + BTN_GAP;
+    }
+}
+
+void App::renderMainView(uint32_t now_ms)
+{
+    const GpsFix fix = _gps.fix();
+
+    if (_dirty)
+    {
+        _dirty = false;
+        _gfx.fillScreen(BLACK);
+        _gfx.setTextColor(WHITE);
+        _gfx.setTextSize(2);
+        _gfx.setCursor(MARGIN_X, MARGIN_Y);
+        _gfx.print("Lennakatten");
+        _gfx.setTextSize(BASE_TEXT_SIZE);
+        if (fix.valid)
+            drawMap(fix.lat, fix.lon);
+        _lastMapDraw = now_ms;
+        return;
+    }
 
     // Map redraw throttled to 1 Hz -- see README's product target.
     if (now_ms - _lastMapDraw >= 1000)
     {
         _lastMapDraw = now_ms;
-        const GpsFix fix = _gps.fix();
         if (fix.valid)
             drawMap(fix.lat, fix.lon);
     }

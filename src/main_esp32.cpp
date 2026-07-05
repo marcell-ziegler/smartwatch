@@ -16,6 +16,8 @@
 #include "hal/IGps.h"
 #include "hal/ITouch.h"
 #include "hal/ITileStore.h"
+#include "hal/IButtons.h"
+#include "hal/ITimeTableStore.h"
 #include "app.h"
 
 // ---- FeatherWing default pins (2.4" TFT FeatherWing) ---------------------
@@ -28,6 +30,14 @@
 #define GPS_RX   16   // ESP32 RX  <- GPS TX
 #define GPS_TX   17   // ESP32 TX  -> GPS RX
 #define GPS_BAUD 9600
+
+// ---- 5-way d-pad wiring: active-low with internal pull-ups. --------------
+// TODO: these are PLACEHOLDER pins -- set them to your actual button wiring.
+#define BTN_UP     12
+#define BTN_DOWN   13
+#define BTN_LEFT   14
+#define BTN_RIGHT  15
+#define BTN_SELECT 32
 
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC);
 Adafruit_STMPE610 ts(STMPE_CS);
@@ -71,8 +81,56 @@ public:
         }
     }
     GpsFix fix() const override { return _fix; }
+
+    GpsClock clock() const override {
+        // The module's RTC keeps date+time even before a position fix, so this
+        // is independent of _fix.valid.
+        // TODO: TinyGPSPlus reports UTC. The schedule is Swedish local time
+        // (CET/CEST) -- apply the local offset (with DST) before display/use.
+        GpsClock c;
+        if (gpsParser.date.isValid() && gpsParser.time.isValid()) {
+            c.valid  = true;
+            c.year   = gpsParser.date.year();
+            c.month  = gpsParser.date.month();
+            c.day    = gpsParser.date.day();
+            c.hour   = gpsParser.time.hour();
+            c.minute = gpsParser.time.minute();
+            c.second = gpsParser.time.second();
+        }
+        return c;
+    }
 private:
     GpsFix _fix;
+};
+
+// ---- Buttons: 5-way d-pad on GPIO, active-low with internal pull-ups. -----
+class Esp32Buttons : public IButtons {
+public:
+    void begin() override {
+        for (auto& b : _btns) pinMode(b.pin, INPUT_PULLUP);
+    }
+    std::optional<Button> poll() override {
+        // Falling edge (pressed pulls the pin LOW) = one press. Returns the
+        // first new press found; other pins' states are still refreshed so no
+        // edge is lost across calls.
+        // TODO: add debouncing (a few-ms settle filter) for real switches.
+        std::optional<Button> hit;
+        for (auto& b : _btns) {
+            const bool down = digitalRead(b.pin) == LOW;
+            if (down && !b.prev && !hit) hit = b.button;
+            b.prev = down;
+        }
+        return hit;
+    }
+private:
+    struct Btn { uint8_t pin; Button button; bool prev; };
+    Btn _btns[5] = {
+        {BTN_UP,     Button::Up,     false},
+        {BTN_DOWN,   Button::Down,   false},
+        {BTN_LEFT,   Button::Left,   false},
+        {BTN_RIGHT,  Button::Right,  false},
+        {BTN_SELECT, Button::Select, false},
+    };
 };
 
 // ---- Tile store on SD: /<z>/<x>/<y>.bin (RGB565 raw) ---------------------
@@ -90,10 +148,29 @@ public:
     }
 };
 
-Esp32Touch  touch;
-Esp32Gps    gps;
-SdTileStore tiles;
-App app(tft, gps, touch, tiles);
+// ---- Timetable CSVs on SD: /timetables/<path> ---------------------------
+class SdTimetableStore : public ITimeTableStore {
+public:
+    bool begin() override { return SD.begin(SD_CS); }  // idempotent; tiles may init too
+    bool readFile(const char* path, std::string& out) override {
+        char full[96];
+        snprintf(full, sizeof(full), "/timetables/%s", path);
+        File f = SD.open(full, FILE_READ);
+        if (!f) return false;
+        out.clear();
+        out.reserve(f.size());
+        while (f.available()) out += (char)f.read();
+        f.close();
+        return true;
+    }
+};
+
+Esp32Touch       touch;
+Esp32Gps         gps;
+SdTileStore      tiles;
+Esp32Buttons     buttons;
+SdTimetableStore timetables;
+App app(tft, gps, touch, tiles, buttons, timetables);
 
 void setup() {
     Serial.begin(115200);

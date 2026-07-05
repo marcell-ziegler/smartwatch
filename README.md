@@ -45,8 +45,10 @@ pio run -e native
 ./.pio/build/native/program
 ```
 
-Controls: **arrow keys** drive the GPS position, **R** toggles replay of
-`assets/tracks/demo.csv`, **Esc** quits.
+Controls: **W A S D** are the device's 5-way d-pad (Up/Left/Down/Right) and
+**Enter** is Select/press — these drive the app's UI (shift picker, menu).
+**Arrow keys** separately nudge the simulated GPS position, **R** toggles replay
+of `assets/tracks/demo.csv`, **Esc** quits.
 
 ## Build & flash — hardware
 

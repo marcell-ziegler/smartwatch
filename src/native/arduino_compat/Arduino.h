@@ -22,6 +22,8 @@
 // one in doesn't matter -- it's already resolved.
 #include <string>
 #include <vector>
+#include <deque>
+#include <optional>
 #include <algorithm>
 #include <functional>
 #include <memory>

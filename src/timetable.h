@@ -183,6 +183,23 @@ std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content);
 // day-of-month incl. leap years). Date range endpoints are treated INCLUSIVE.
 bool isValidIsoDate(const std::string &s);
 
+// ---------------------------------------------------------------------------
+//  Date helpers used to resolve "what runs today" from a calendar date.
+// ---------------------------------------------------------------------------
+
+// ISO 8601 weekday for a Gregorian date: Monday=1 .. Sunday=7.
+int isoDayOfWeek(int year, int month, int day);
+
+// Formats a date as "YYYY-MM-DD" (zero-padded), matching seasons.csv.
+std::string toIsoDate(int year, int month, int day);
+
+// The traffic category running on the given date: the first season rule whose
+// weekday matches and whose (inclusive) date range contains the date. nullopt
+// if none applies. Assumes `rules` has passed validateSeasons (which
+// guarantees no conflicting overlaps, so "first match" is unambiguous).
+std::optional<std::string> categoryForDate(const std::vector<SeasonalTimetableRule> &rules,
+                                           int year, int month, int day);
+
 // seasons.csv: each date well-formed and validFrom <= validTo; no exact
 // duplicate rows; and no two rules for the same weekday whose (inclusive) date
 // ranges overlap while mapping to different categories (the "one category per

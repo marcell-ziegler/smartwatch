@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <cstdio>
 #include <utility>
 
 const Train *Timetable::findTrain(const std::string &number) const
@@ -392,6 +393,35 @@ bool isValidIsoDate(const std::string &s)
     if (month == 2 && leap)
         dmax = 29;
     return day >= 1 && day <= dmax;
+}
+
+int isoDayOfWeek(int year, int month, int day)
+{
+    // Sakamoto's algorithm -> 0=Sunday .. 6=Saturday.
+    static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    int y = year;
+    if (month < 3)
+        y -= 1;
+    const int w = (y + y / 4 - y / 100 + y / 400 + t[month - 1] + day) % 7;
+    return w == 0 ? 7 : w; // 0=Sunday -> ISO 7
+}
+
+std::string toIsoDate(int year, int month, int day)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+    return buf;
+}
+
+std::optional<std::string> categoryForDate(const std::vector<SeasonalTimetableRule> &rules,
+                                           int year, int month, int day)
+{
+    const std::string today = toIsoDate(year, month, day);
+    const int weekday = isoDayOfWeek(year, month, day);
+    for (const auto &r : rules)
+        if (r.dayOfWeek == weekday && r.validFrom <= today && today <= r.validTo)
+            return r.trafficCategory;
+    return std::nullopt;
 }
 
 std::vector<std::string> validateSeasons(const std::vector<SeasonalTimetableRule> &rules)

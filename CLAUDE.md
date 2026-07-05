@@ -40,11 +40,31 @@ own concrete drivers and hands them to the same `App`:
 
 | Seam | native impl | esp32 impl |
 |---|---|---|
-| `IGps` | `SimGps` (CSV replay + arrow-key nudge) | `Esp32Gps` (TinyGPSPlus/UART) |
+| `IGps` | `SimGps` (CSV replay + arrow-key nudge; `clock()` = host clock) | `Esp32Gps` (TinyGPSPlus/UART; `clock()` = GPS RTC) |
 | `ITouch` | `SdlTouch` (mouse) | `Esp32Touch` (STMPE610) |
+| `IButtons` | `SdlButtons` (WASD + Enter) | `Esp32Buttons` (GPIO d-pad; placeholder pins) |
 | `ITileStore` | `FolderTileStore` | `SdTileStore` (SD card) |
-| `ITimeTableStore` | *(not yet implemented)* | *(not yet implemented)* |
+| `ITimeTableStore` | `FolderTimetableStore` (`assets/timetables/`) | `SdTimetableStore` (`/timetables/` on SD) |
 | display | `PCDisplay` (SDL2) | `Adafruit_ILI9341` (is-a GFX) |
+
+`IGps::clock()` returns a `GpsClock` (date + h/m/s + validity), tracked
+separately from `fix()` because the RTC keeps time before a position fix. It
+drives the always-on clock overlay and the "what category runs today" lookup.
+**Caveat:** the GPS module reports **UTC**; the schedule is Swedish local time
+(CET/CEST) — `Esp32Gps::clock()` has a TODO to apply the local offset. The
+simulator's `SimGps::clock()` already uses host *local* time, so the two
+targets currently disagree by the UTC offset until that's done.
+
+`ITimeTableStore` is just `readFile(path, out)` (raw bytes); parsing lives in
+`src/timetable.cpp`. Paths are relative to the timetables root
+(`readFile("B/80.csv", ...)`).
+
+`IButtons` is edge-triggered: `poll()` returns the next button-*down* since the
+last call (or `nullopt`). On native, the SDL loop injects presses via
+`SdlButtons::pushDown()` (auto-repeat ignored); on esp32, `Esp32Buttons` reads
+active-low GPIO with per-pin edge detection (**pins are placeholders — no
+debounce yet**). `Button` is `{Up,Down,Left,Right,Select}` (the 5-way d-pad);
+extra buttons get added here later.
 
 `src/main_native.cpp` and `src/main_esp32.cpp` are the wiring; `build_src_filter`
 in `platformio.ini` includes/excludes the target-specific files.
@@ -72,8 +92,12 @@ in `platformio.ini` includes/excludes the target-specific files.
 3. **The native Arduino shim** lives in `src/native/arduino_compat/`
    (`Arduino.h`, `Print.h`, `WString.h`). It provides just enough of the
    Arduino core for `Adafruit_GFX` to compile on desktop. Gotcha already
-   handled: STL headers are included *before* the `min`/`max`/`abs` macros are
-   defined, because those macros otherwise clobber libstdc++ internals.
+   handled: STL headers are `#include`d *before* the `min`/`max`/`abs` macros
+   are defined, because those macros otherwise clobber libstdc++ internals. If
+   native/shared code starts using a **new** STL header (this already bit
+   `<deque>`/`<optional>` when buttons were added) and you get
+   `expected unqualified-id before '(' token` from inside a libstdc++ header,
+   add that header to the pre-include list in `Arduino.h`.
 
 4. **ESP32 RAM: a full tile buffer must be heap-allocated, not static.** A
    256×256 RGB565 tile is `TILE_WORDS*2 = 128 KB`. As a `static` array this
@@ -194,26 +218,52 @@ rule; special/event days get their own single-day category + directory.
 data structures; all CSV parsers (`parseSeasonsCsv`, `parseShiftsCsv`,
 `parseTrainsCsv`, `parseStopsCsv`) + field converters; `Timetable::findTrain`;
 cross-record validators (`isValidIsoDate`, `validateSeasons`, `validateShifts`,
-`validateTimetable` — season date-range/overlap/exclusivity with inclusive
-endpoints, and train/shift/station uniqueness + meet/nextNumber referential
-integrity). Covered by the `tests/` suite (see conventions below). Both `pio
-run -e native` and `-e esp32` build clean. Real B-traffic data is being entered
-by hand in `assets/timetables/`; the user is actively filling per-train files.
+`validateTimetable`); date helpers (`isoDayOfWeek`, `toIsoDate`,
+`categoryForDate`). The `App` state machine, clock overlay, and shift
+auto-loading (below) are wired end-to-end; `IGps::clock()` and both
+`ITimeTableStore` impls are done. Covered by the `tests/` suite (see conventions
+below). Both `pio run -e native` and `-e esp32` build clean. Real B-traffic data
+is being entered by hand in `assets/timetables/`; the user is actively filling
+per-train files.
+
+**App structure:** `App` is a small state machine over
+`AppState { ShiftSelection, Menu, MainView }` (in `app.h`). `tick()` drains all
+queued button presses (`handle*Button`, input-only, no drawing) then `render()`s
+the current screen. Screens repaint only when a `_dirty` flag is set (state or
+selection change); `MainView`'s map additionally redraws at 1 Hz. Boots into
+`ShiftSelection`. Transitions: ShiftSelection --Select--> MainView; MainView
+--Select--> Menu; Menu {Resume→MainView, Change shift→ShiftSelection}. Reusable
+`drawButton()` (in `src/ui.{h,cpp}`) draws a labelled button, highlighted
+black-on-white when selected, white-on-black otherwise.
+
+**Clock overlay:** `App::drawClock()` draws the live time (HH:MM:SS, size 2) on
+*every* screen, redrawn whenever the second changes (independent of the `_dirty`
+full-repaints, so menus don't flicker). Position is state-dependent: bottom-right
+(below the map) in MainView, top-right in the menus. Note the top-right menu
+clock can collide with a long title on a 240px-wide panel (the real ILI9341 at
+rotation 0) — fine on the 320px sim; tune when hardware layout is finalised.
+
+**Shift auto-loading:** `App::loadShiftSuggestions()` (called on boot and on
+re-entry to ShiftSelection) reads `seasons.csv` + `shifts.csv` via
+`ITimeTableStore`, resolves today's category from `_gps.clock()` via
+`categoryForDate()` (date helpers `isoDayOfWeek`/`toIsoDate`/`categoryForDate`
+in `timetable.cpp`), and lists that category's shifts (labelled `"<number><cat>"`,
+e.g. `31B`). Falls back to listing *all* shifts if the date can't be resolved
+(e.g. GPS cold start), and shows "No shifts for today" if the list is empty.
 
 **Stubbed / not yet done:**
+- Selecting a shift stores it (`_selectedShift`) but does **not** yet load that
+  category's full `Timetable` (roster + per-train stops) — `loadCategory` still
+  needs writing, and MainView shows only the map + clock, no timetable/meets.
+- `loadCategory` — the assembly step (roster + per-train stops → a `Timetable`
+  in RAM) is not written; `App` only knows the selected shift's label so far.
 - `App::drawLine()` — declared, empty. Intended: progress along the line
   (last/current/next stops as dots, completed segment green).
-- Touch input is polled each tick but not acted on. No shift-picker UI yet.
-- `ITimeTableStore` has **no concrete implementations** (need
-  `FolderTimetableStore` for native + an SD one for esp32) and there is **no
-  `loadCategory`** assembly step (roster + per-train stops → `Timetable`) yet.
+- Touch input is polled each tick but not acted on (navigation is button-based).
 - **No `stations.csv`** or station parser yet, though the `Station` struct
   exists — station geo/km data still needs a home.
-- GPS **RTC not wired**: `IGps` has no `clock()` accessor yet. Plan: add a
-  `clock()` returning a `ClockTime` (+ validity) read from TinyGPSPlus's
-  time/date, independent of position validity — the module's clock is usable
-  before a position fix. `gps.date` also feeds the `seasons.csv` "what's today"
-  lookup.
+- **Timezone:** `Esp32Gps::clock()` returns UTC; schedule times are Swedish
+  local (CET/CEST). Apply the local offset before the two build targets agree.
 
 ## Known open decisions / caveats
 

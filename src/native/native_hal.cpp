@@ -1,8 +1,14 @@
 #include "native_hal.h"
 
-#include <Arduino.h>   // millis()
-#include <SDL2/SDL.h>
+// STL headers must precede <Arduino.h>: the shim's min/max/abs macros clobber
+// libstdc++ internals if they're active when these are parsed.
 #include <cstdio>
+#include <ctime>
+#include <fstream>
+#include <sstream>
+
+#include <SDL2/SDL.h>
+#include <Arduino.h>   // millis()
 
 // ---------------------------------------------------------------------------
 //  SimGps
@@ -54,6 +60,22 @@ void SimGps::toggleReplay() {
     if (_replaying) _lastStepMs = 0;   // step immediately on the next update()
 }
 
+GpsClock SimGps::clock() const {
+    // Desktop stand-in for the module's RTC: the host's local wall clock.
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    GpsClock c;
+    c.valid  = true;
+    c.year   = (uint16_t)(tm.tm_year + 1900);
+    c.month  = (uint8_t)(tm.tm_mon + 1);
+    c.day    = (uint8_t)tm.tm_mday;
+    c.hour   = (uint8_t)tm.tm_hour;
+    c.minute = (uint8_t)tm.tm_min;
+    c.second = (uint8_t)tm.tm_sec;
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 //  SdlTouch
 // ---------------------------------------------------------------------------
@@ -84,4 +106,16 @@ bool FolderTileStore::loadTile(int z, int x, int y, uint16_t* out) {
     size_t got = fread(out, sizeof(uint16_t), TILE_WORDS, f);
     fclose(f);
     return got == (size_t)TILE_WORDS;
+}
+
+// ---------------------------------------------------------------------------
+//  FolderTimetableStore
+// ---------------------------------------------------------------------------
+bool FolderTimetableStore::readFile(const char* path, std::string& out) {
+    std::ifstream f(_root + "/" + path, std::ios::binary);
+    if (!f) return false;
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    return true;
 }
