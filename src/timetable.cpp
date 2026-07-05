@@ -368,3 +368,128 @@ std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content)
     }
     return out;
 }
+
+// ---------------------------------------------------------------------------
+//  Cross-record validation.
+// ---------------------------------------------------------------------------
+bool isValidIsoDate(const std::string &s)
+{
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-')
+        return false;
+    for (int i : {0, 1, 2, 3, 5, 6, 8, 9})
+        if (!std::isdigit((unsigned char)s[i]))
+            return false;
+
+    const int year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
+    const int month = (s[5] - '0') * 10 + (s[6] - '0');
+    const int day = (s[8] - '0') * 10 + (s[9] - '0');
+    if (month < 1 || month > 12)
+        return false;
+
+    static const int mdays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int dmax = mdays[month - 1];
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    if (month == 2 && leap)
+        dmax = 29;
+    return day >= 1 && day <= dmax;
+}
+
+std::vector<std::string> validateSeasons(const std::vector<SeasonalTimetableRule> &rules)
+{
+    std::vector<std::string> errs;
+
+    // Per-row: dates well-formed, range not reversed.
+    for (size_t i = 0; i < rules.size(); ++i)
+    {
+        const auto &r = rules[i];
+        const bool fromOk = isValidIsoDate(r.validFrom);
+        const bool toOk = isValidIsoDate(r.validTo);
+        if (!fromOk)
+            errs.push_back("season " + std::to_string(i) + ": invalid validFrom '" + r.validFrom + "'");
+        if (!toOk)
+            errs.push_back("season " + std::to_string(i) + ": invalid validTo '" + r.validTo + "'");
+        // ISO YYYY-MM-DD sorts chronologically as a string.
+        if (fromOk && toOk && r.validFrom > r.validTo)
+            errs.push_back("season " + std::to_string(i) + ": reversed range (" + r.validFrom + " > " + r.validTo + ")");
+    }
+
+    // Pairwise: exact duplicates, and same-weekday overlap into different
+    // categories (endpoints inclusive).
+    for (size_t i = 0; i < rules.size(); ++i)
+    {
+        for (size_t j = i + 1; j < rules.size(); ++j)
+        {
+            const auto &a = rules[i];
+            const auto &b = rules[j];
+
+            if (a.validFrom == b.validFrom && a.validTo == b.validTo &&
+                a.dayOfWeek == b.dayOfWeek && a.trafficCategory == b.trafficCategory)
+            {
+                errs.push_back("seasons " + std::to_string(i) + " and " + std::to_string(j) + ": exact duplicate rows");
+                continue;
+            }
+
+            if (a.dayOfWeek != b.dayOfWeek || a.trafficCategory == b.trafficCategory)
+                continue; // different weekday can't collide; same category is allowed to overlap
+            // Only meaningful if all endpoints are well-formed dates.
+            if (!isValidIsoDate(a.validFrom) || !isValidIsoDate(a.validTo) ||
+                !isValidIsoDate(b.validFrom) || !isValidIsoDate(b.validTo))
+                continue;
+            // Inclusive overlap: [af,at] and [bf,bt] overlap iff af <= bt && bf <= at.
+            if (a.validFrom <= b.validTo && b.validFrom <= a.validTo)
+                errs.push_back("seasons " + std::to_string(i) + " and " + std::to_string(j) +
+                               ": weekday " + std::to_string(a.dayOfWeek) +
+                               " overlap maps to different categories (" + a.trafficCategory +
+                               " vs " + b.trafficCategory + ")");
+        }
+    }
+    return errs;
+}
+
+std::vector<std::string> validateShifts(const std::vector<Shift> &shifts)
+{
+    std::vector<std::string> errs;
+    for (size_t i = 0; i < shifts.size(); ++i)
+        for (size_t j = i + 1; j < shifts.size(); ++j)
+            if (shifts[i].number == shifts[j].number &&
+                shifts[i].trafficCategory == shifts[j].trafficCategory)
+                errs.push_back("shifts " + std::to_string(i) + " and " + std::to_string(j) +
+                               ": duplicate key (" + std::to_string(shifts[i].number) + "," +
+                               shifts[i].trafficCategory + ")");
+    return errs;
+}
+
+std::vector<std::string> validateTimetable(const Timetable &tt)
+{
+    std::vector<std::string> errs;
+
+    // Train numbers unique within the category.
+    for (size_t i = 0; i < tt.trains.size(); ++i)
+        for (size_t j = i + 1; j < tt.trains.size(); ++j)
+            if (tt.trains[i].number == tt.trains[j].number)
+                errs.push_back("category " + tt.trafficCategory + ": duplicate train number '" +
+                               tt.trains[i].number + "'");
+
+    for (const auto &t : tt.trains)
+    {
+        // Each station called at most once per train.
+        for (size_t i = 0; i < t.stops.size(); ++i)
+            for (size_t j = i + 1; j < t.stops.size(); ++j)
+                if (t.stops[i].stationSignature == t.stops[j].stationSignature)
+                    errs.push_back("train " + t.number + ": station '" +
+                                   t.stops[i].stationSignature + "' appears more than once");
+
+        // Referential: nextNumber resolves.
+        if (!t.nextNumber.empty() && tt.findTrain(t.nextNumber) == nullptr)
+            errs.push_back("train " + t.number + ": nextNumber '" + t.nextNumber +
+                           "' is not a train in this category");
+
+        // Referential: every meet resolves.
+        for (const auto &stop : t.stops)
+            for (const auto &meet : stop.meets)
+                if (tt.findTrain(meet) == nullptr)
+                    errs.push_back("train " + t.number + ": meet '" + meet +
+                                   "' is not a train in this category");
+    }
+    return errs;
+}

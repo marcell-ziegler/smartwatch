@@ -170,3 +170,29 @@ std::optional<std::vector<SeasonalTimetableRule>> parseSeasonsCsv(const std::str
 std::optional<std::vector<Shift>> parseShiftsCsv(const std::string &content);
 std::optional<std::vector<Train>> parseTrainsCsv(const std::string &content);
 std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content);
+
+// ---------------------------------------------------------------------------
+//  Cross-record validation (desktop pre-flight). Row-level well-formedness is
+//  already enforced by the parsers; these check invariants that span multiple
+//  records. Each returns a list of human-readable error messages -- an EMPTY
+//  vector means valid. Intended to run on the desktop before an SD card ships;
+//  a wrong meet/overlap is safety-relevant, so fail loudly here.
+// ---------------------------------------------------------------------------
+
+// True iff s is a real ISO calendar date "YYYY-MM-DD" (month 1-12, valid
+// day-of-month incl. leap years). Date range endpoints are treated INCLUSIVE.
+bool isValidIsoDate(const std::string &s);
+
+// seasons.csv: each date well-formed and validFrom <= validTo; no exact
+// duplicate rows; and no two rules for the same weekday whose (inclusive) date
+// ranges overlap while mapping to different categories (the "one category per
+// day" rule). Overlapping same-weekday ranges with the SAME category are OK.
+std::vector<std::string> validateSeasons(const std::vector<SeasonalTimetableRule> &rules);
+
+// shifts.csv: the (number, category) key is unique.
+std::vector<std::string> validateShifts(const std::vector<Shift> &shifts);
+
+// A loaded category (roster + each train's stops): train numbers unique; no
+// station repeated within one train; every nextNumber and every meets entry
+// resolves to a train in this category's roster.
+std::vector<std::string> validateTimetable(const Timetable &tt);
