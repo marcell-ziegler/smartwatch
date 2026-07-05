@@ -1,0 +1,5 @@
+# number,vehicleType,direction,nextNumber
+100Y,Railbus,Up,101Y
+101Y,Railbus,Down,102Y
+102Y,Railbus,Up,103Y
+103Y,Railbus,Down,

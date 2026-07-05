@@ -1,0 +1,17 @@
+# number,vehicleType,direction,nextNumber
+70,BigSteam,Up,71
+71,BigSteam,Down,74
+74,BigSteam,Up,75
+75,BigSteam,Down,78
+78,BigSteam,Up,79
+79,BigSteam,Down,
+990Y,Railbus,Up,93Y
+93Y,Railbus,Down,96Y
+96Y,Railbus,Up,97Y
+97Y,Railbus,Down,
+60,Diesel,Up,61
+61,Diesel,Down,62
+62,Diesel,Up,63
+63,Diesel,Down,64
+64,Diesel,Up,65
+65,Diesel,Down,
