@@ -5,13 +5,14 @@
 #include <stdio.h>
 
 // Chosen tile zoom level
-#define ZOOM 13
-#define MARGIN_X 5
-#define MARGIN_Y 5
-#define BASE_TEXT_SIZE 1
 
 namespace
 {
+    constexpr int ZOOM = 13;
+    constexpr int MARGIN_X = 5;
+    constexpr int MARGIN_Y = 5;
+    constexpr int BASE_TEXT_SIZE = 1;
+
     // Map square: top-right corner of the screen.
     constexpr int16_t MAP_W = 120;
     constexpr int16_t MAP_H = 120;
@@ -19,6 +20,7 @@ namespace
 
     constexpr uint16_t BLACK = 0x0000;
     constexpr uint16_t WHITE = 0xFFFF;
+    constexpr uint16_t GREEN = 0x47AD;
 
     // Menu actions, in display order.
     const char *const MENU_ITEMS[] = {"Resume", "Change shift"};
@@ -44,7 +46,7 @@ namespace
 App::App(Adafruit_GFX &gfx, IGps &gps, ITouch &touch, ITileStore &tiles,
          IButtons &buttons, ITimeTableStore &timetables)
     : _gfx(gfx), _gps(gps), _touch(touch), _tiles(tiles), _buttons(buttons),
-      _timetables(timetables) {}
+      _timetableStore(timetables) {}
 
 void App::begin()
 {
@@ -52,7 +54,7 @@ void App::begin()
     _touch.begin();
     _gps.begin();
     _buttons.begin();
-    _timetables.begin();
+    _timetableStore.begin();
     _gfx.setRotation(0);
     _gfx.fillScreen(BLACK);
 
@@ -67,8 +69,8 @@ void App::loadShiftSuggestions()
     _shiftIndex = 0;
 
     std::string seasonsRaw, shiftsRaw;
-    if (!_timetables.readFile("seasons.csv", seasonsRaw) ||
-        !_timetables.readFile("shifts.csv", shiftsRaw))
+    if (!_timetableStore.readFile("seasons.csv", seasonsRaw) ||
+        !_timetableStore.readFile("shifts.csv", shiftsRaw))
         return; // no data -> empty list (screen shows a placeholder)
 
     auto seasons = parseSeasonsCsv(seasonsRaw);
@@ -180,7 +182,7 @@ void App::handleMenuButton(Button b)
         break;
     case Button::Select:
         if (_menuIndex == 0)
-            setState(AppState::MainView);   // Resume
+            setState(AppState::MainView); // Resume
         else
             setState(AppState::ShiftSelection); // Change shift
         break;
@@ -321,15 +323,17 @@ void App::renderMainView(uint32_t now_ms)
         if (fix.valid)
             drawMap(fix.lat, fix.lon);
         _lastMapDraw = now_ms;
+        drawLine();
         return;
     }
 
-    // Map redraw throttled to 1 Hz -- see README's product target.
+    // Map / line redraw throttled to 1 Hz -- see README's product target.
     if (now_ms - _lastMapDraw >= 1000)
     {
         _lastMapDraw = now_ms;
         if (fix.valid)
             drawMap(fix.lat, fix.lon);
+        drawLine();
     }
 }
 
@@ -404,4 +408,35 @@ void App::drawMap(double lat, double lon)
     _gfx.fillCircle(mapX0 + MAP_W / 2, mapY0 + MAP_H / 2, 3, MARKER_COLOR);
 
     _gfx.endWrite();
+}
+
+void App::drawLine()
+{
+    // Radius of a stop circle
+    constexpr int STOP_RADIUS = 3;
+
+    constexpr int LEFT_MARGIN = 10;
+    constexpr int Y_MARGIN = 15;
+    static const int BOTTOM_STOP_Y = _gfx.height() - Y_MARGIN;
+    static const int MIDDLE_STOP_Y = _gfx.height() / 2;
+    constexpr int TOP_STOP_Y = Y_MARGIN + 20;
+
+    // Clear area
+    _gfx.fillRect(0, TOP_STOP_Y - STOP_RADIUS, LEFT_MARGIN + 2 * STOP_RADIUS, (BOTTOM_STOP_Y + STOP_RADIUS) - (TOP_STOP_Y - STOP_RADIUS), BLACK);
+
+    // Bottom line
+    // TODO: make gradually turn green
+    _gfx.drawLine(LEFT_MARGIN, BOTTOM_STOP_Y, LEFT_MARGIN, MIDDLE_STOP_Y, GREEN);
+
+    // Top line
+    _gfx.drawLine(LEFT_MARGIN, MIDDLE_STOP_Y, LEFT_MARGIN, TOP_STOP_Y, WHITE);
+
+    // Bottom Circle
+    _gfx.fillCircle(LEFT_MARGIN, BOTTOM_STOP_Y, STOP_RADIUS, WHITE);
+
+    // Middle Circle
+    _gfx.fillCircle(LEFT_MARGIN, MIDDLE_STOP_Y, STOP_RADIUS, WHITE);
+
+    // Top Circle
+    _gfx.fillCircle(LEFT_MARGIN, TOP_STOP_Y, STOP_RADIUS, WHITE);
 }
