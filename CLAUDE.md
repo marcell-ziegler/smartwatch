@@ -322,10 +322,15 @@ meets/other trains resolve.
   are filled **by hand** by the user. Do **not** mass-generate timetable times
   from images — a wrong meet/time is a real hazard, and looks authoritative
   once in a file.
-- **Swedish characters:** data is UTF-8 (needs å/ä/ö in names/remarks/station
-  sigs like "Uö"), but `Adafruit_GFX`'s built-in font (`glcdfont.c`) is
-  **ASCII-only**. A custom `GFXfont` covering Swedish glyphs is needed before
-  those render correctly on screen. Store correctly now; fix rendering later.
+- **Swedish characters (solved):** data is UTF-8 (needs å/ä/ö in
+  names/remarks/station sigs like "Uö"). The built-in `glcdfont.c` is actually
+  **Code Page 437**, which *contains* å/ä/ö/Å/Ä/Ö — the earlier scrambling was
+  just UTF-8's multi-byte encoding rendering as two glyphs each. `toCp437()` (in
+  `src/ui.cpp`) transcodes UTF-8 → the single CP437 byte at the display layer
+  (data stays UTF-8), and `begin()` calls `_gfx.cp437(true)`. Wrap any
+  data-derived text in `toCp437(...)` before `print()` (already done for station
+  labels in `drawStopLabel` and the DataError message). No custom `GFXfont`
+  needed unless glyphs beyond CP437 are ever required.
 - The timetable enums in `timetable.h` are **unscoped** `enum` (values like
   `None`, `Up`, `Disembarking` leak into global scope). `None` in particular
   collides with X11's `#define None` on Linux — if `timetable.h` ever gets

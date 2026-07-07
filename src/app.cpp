@@ -55,7 +55,7 @@ namespace
             label += buf;
         }
         gfx.setCursor(x, y - 3);
-        gfx.print(label.c_str());
+        gfx.print(toCp437(label).c_str()); // signatures contain å/ä/ö
     }
 
     // lat/lon -> world pixel position at the given zoom (Web Mercator). This is
@@ -83,6 +83,7 @@ void App::begin()
     _buttons.begin();
     _timetableStore.begin();
     _gfx.setRotation(0);
+    _gfx.cp437(true); // true CP437 charset, so transcoded å/ä/ö render correctly
     _gfx.fillScreen(BLACK);
 
     // Line-wide station geo (centre + radius), loaded once. Tracking degrades
@@ -400,7 +401,7 @@ void App::renderDataError()
     // long validator message flows onto multiple lines rather than clipping.
     _gfx.setTextSize(1);
     _gfx.setCursor(MARGIN_X, LIST_TOP);
-    _gfx.print(_errorMessage.c_str());
+    _gfx.print(toCp437(_errorMessage).c_str()); // may embed station sigs (å/ä/ö)
 
     _gfx.setCursor(MARGIN_X, _gfx.height() - 20);
     _gfx.print("Press any key to pick another shift");
