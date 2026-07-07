@@ -16,7 +16,8 @@ enum class AppState
 {
     ShiftSelection,
     Menu,
-    MainView
+    MainView,
+    DataError // shift/train/timetable data was invalid; prompt for another shift
 };
 
 // The application. Shared verbatim between the esp32 and native build
@@ -57,20 +58,27 @@ private:
     // Menu: fixed list of actions.
     int _menuIndex = 0;
 
+    // DataError: human-readable reason the selected shift couldn't be loaded.
+    std::string _errorMessage;
+
     void setState(AppState next);
 
     // Populates _shifts for the current day using _timetables + _gps.clock().
     void loadShiftSuggestions();
 
     // Loads the whole selected category (all trains + their stops) into
-    // _timetable. Clears _timetable on failure (missing/incomplete data).
-    void loadTimetable();
+    // _timetable and validates it. Returns false (and sets _errorMessage) if
+    // the data is missing, malformed, or referentially invalid; _timetable is
+    // cleared in that case. On success every train has stops and every
+    // meet/nextNumber and the shift's own trains all resolve.
+    bool loadTimetable();
 
     // Input handling: mutate state for one button press; no drawing here.
     void handleButton(Button b);
     void handleShiftSelectionButton(Button b);
     void handleMenuButton(Button b);
     void handleMainViewButton(Button b);
+    void handleDataErrorButton(Button b);
 
     // Rendering: paint the current screen (honours _dirty; MainView's map is
     // additionally throttled to 1 Hz).
@@ -78,6 +86,7 @@ private:
     void renderShiftSelection();
     void renderMenu();
     void renderMainView(uint32_t now_ms);
+    void renderDataError();
 
     // Draws the live clock. Position depends on state: bottom-right (below the
     // map) in MainView, top-right in the menus. Redrawn once per second.

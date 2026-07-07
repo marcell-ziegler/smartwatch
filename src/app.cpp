@@ -3,6 +3,7 @@
 #include "timetable.h"
 #include <math.h>
 #include <stdio.h>
+#include "Arduino.h"
 
 // Chosen tile zoom level
 
@@ -100,13 +101,47 @@ void App::loadShiftSuggestions()
     }
 }
 
-void App::loadTimetable()
+bool App::loadTimetable()
 {
     // Load the entire day's category (every train, fully populated with stops)
-    // so that meets/nextNumber references all resolve. The shift's own trains
-    // are then found within it via _timetable.findTrain(number).
+    // so that meets/nextNumber references all resolve.
     auto tt = loadCategory(_timetableStore, _selectedShift.trafficCategory);
-    _timetable = tt ? std::move(*tt) : Timetable{};
+    if (!tt)
+    {
+        _timetable = Timetable{};
+        _errorMessage = "No timetable data for " + shiftLabel(_selectedShift);
+        Serial.print("loadTimetable: ");
+        Serial.println(_errorMessage.c_str());
+        return false;
+    }
+    _timetable = std::move(*tt);
+
+    // Cross-record checks: duplicate train numbers, a station repeated within a
+    // train, and dangling meet / nextNumber references.
+    const auto errs = validateTimetable(_timetable);
+    if (!errs.empty())
+    {
+        _errorMessage = errs.front(); // surface the first problem
+        Serial.print("loadTimetable invalid: ");
+        Serial.println(_errorMessage.c_str());
+        _timetable = Timetable{};
+        return false;
+    }
+
+    // Every train this shift works must exist in the loaded category.
+    for (const auto &num : _selectedShift.trainNumbers)
+    {
+        if (_timetable.findTrain(num) == nullptr)
+        {
+            _errorMessage = "Shift " + shiftLabel(_selectedShift) +
+                            " references unknown train " + num;
+            Serial.print("loadTimetable: ");
+            Serial.println(_errorMessage.c_str());
+            _timetable = Timetable{};
+            return false;
+        }
+    }
+    return true;
 }
 
 void App::tick(uint32_t now_ms)
@@ -147,6 +182,9 @@ void App::handleButton(Button b)
     case AppState::MainView:
         handleMainViewButton(b);
         break;
+    case AppState::DataError:
+        handleDataErrorButton(b);
+        break;
     }
 }
 
@@ -173,8 +211,9 @@ void App::handleShiftSelectionButton(Button b)
         if (n > 0)
         {
             _selectedShift = _shifts[_shiftIndex];
-            loadTimetable(); // load the whole day's category into _timetable
-            setState(AppState::MainView);
+            // Load + validate the day's category; on bad data show the error
+            // screen instead of entering MainView with an unusable timetable.
+            setState(loadTimetable() ? AppState::MainView : AppState::DataError);
         }
         break;
     default:
@@ -214,6 +253,12 @@ void App::handleMainViewButton(Button b)
     }
 }
 
+void App::handleDataErrorButton(Button b)
+{
+    (void)b; // any press returns to shift selection to pick another
+    setState(AppState::ShiftSelection);
+}
+
 // ---------------------------------------------------------------------------
 //  Rendering
 // ---------------------------------------------------------------------------
@@ -231,6 +276,9 @@ void App::render(uint32_t now_ms)
         break;
     case AppState::MainView:
         renderMainView(now_ms);
+        break;
+    case AppState::DataError:
+        renderDataError();
         break;
     }
 
@@ -297,6 +345,28 @@ void App::renderShiftSelection()
                    shiftLabel(_shifts[i]).c_str(), i == _shiftIndex);
         y += BTN_H + BTN_GAP;
     }
+}
+
+void App::renderDataError()
+{
+    if (!_dirty)
+        return;
+    _dirty = false;
+
+    _gfx.fillScreen(BLACK);
+    _gfx.setTextColor(WHITE);
+    _gfx.setTextSize(2);
+    _gfx.setCursor(MARGIN_X, MARGIN_Y);
+    _gfx.print("Data error");
+
+    // Detail line(s). Adafruit_GFX wraps at the screen edge by default, so a
+    // long validator message flows onto multiple lines rather than clipping.
+    _gfx.setTextSize(1);
+    _gfx.setCursor(MARGIN_X, LIST_TOP);
+    _gfx.print(_errorMessage.c_str());
+
+    _gfx.setCursor(MARGIN_X, _gfx.height() - 20);
+    _gfx.print("Press any key to pick another shift");
 }
 
 void App::renderMenu()
@@ -435,6 +505,8 @@ void App::drawLine()
     static const int MIDDLE_STOP_Y = _gfx.height() / 2;
     constexpr int TOP_STOP_Y = Y_MARGIN + 20;
 
+    constexpr int TEXT_MARGIN = 10;
+
     // Clear area
     _gfx.fillRect(0, TOP_STOP_Y - STOP_RADIUS, LEFT_MARGIN + 2 * STOP_RADIUS, (BOTTOM_STOP_Y + STOP_RADIUS) - (TOP_STOP_Y - STOP_RADIUS), BLACK);
 
@@ -453,4 +525,8 @@ void App::drawLine()
 
     // Top Circle
     _gfx.fillCircle(LEFT_MARGIN, TOP_STOP_Y, STOP_RADIUS, WHITE);
+
+    _gfx.setCursor(LEFT_MARGIN + TEXT_MARGIN, BOTTOM_STOP_Y);
+
+    _gfx.print(_timetable.findTrain(_selectedShift.trainNumbers[0])->stops[0].stationSignature.c_str());
 }

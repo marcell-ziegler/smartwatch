@@ -96,3 +96,25 @@ static inline uint32_t millis() {
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now() - t0).count();
 }
 static inline void delay(uint32_t) {}   // no-op on desktop
+
+// --- Serial: forwards to stdout so Serial.print()/println() from shared code
+//     show up in the terminal on the desktop build. On hardware the real
+//     HardwareSerial (UART) provides this; here it's a thin Print over stdout.
+//     Inline variable => one shared `Serial` across all native TUs (C++17).
+class SerialClass : public Print {
+public:
+    void begin(unsigned long /*baud*/ = 0) {}   // no-op on desktop
+    void end() {}
+    void flush() { fflush(stdout); }
+    int  available() { return 0; }              // no desktop RX
+    int  read() { return -1; }
+    explicit operator bool() const { return true; }  // `while (!Serial) {}` idiom
+
+    using Print::write;   // keep write(const char*) etc. visible past the overrides
+    size_t write(uint8_t c) override { return fwrite(&c, 1, 1, stdout); }
+    size_t write(const uint8_t* buf, size_t size) override {
+        return fwrite(buf, 1, size, stdout);
+    }
+};
+
+inline SerialClass Serial;

@@ -97,7 +97,12 @@ in `platformio.ini` includes/excludes the target-specific files.
    native/shared code starts using a **new** STL header (this already bit
    `<deque>`/`<optional>` when buttons were added) and you get
    `expected unqualified-id before '(' token` from inside a libstdc++ header,
-   add that header to the pre-include list in `Arduino.h`.
+   add that header to the pre-include list in `Arduino.h`. The shim also
+   provides a `Serial` object (an `inline` `Print` subclass writing to stdout)
+   so `Serial.print()/println()` from shared code appear in the terminal on
+   native, matching the real UART `Serial` on esp32. `Serial.printf()` is
+   **not** included (base `Print` has no `printf`) — add it to `SerialClass` if
+   shared code needs it.
 
 4. **ESP32 RAM: a full tile buffer must be heap-allocated, not static.** A
    256×256 RGB565 tile is `TILE_WORDS*2 = 128 KB`. As a `static` array this
@@ -227,14 +232,24 @@ is being entered by hand in `assets/timetables/`; the user is actively filling
 per-train files.
 
 **App structure:** `App` is a small state machine over
-`AppState { ShiftSelection, Menu, MainView }` (in `app.h`). `tick()` drains all
-queued button presses (`handle*Button`, input-only, no drawing) then `render()`s
-the current screen. Screens repaint only when a `_dirty` flag is set (state or
-selection change); `MainView`'s map additionally redraws at 1 Hz. Boots into
-`ShiftSelection`. Transitions: ShiftSelection --Select--> MainView; MainView
---Select--> Menu; Menu {Resume→MainView, Change shift→ShiftSelection}. Reusable
-`drawButton()` (in `src/ui.{h,cpp}`) draws a labelled button, highlighted
-black-on-white when selected, white-on-black otherwise.
+`AppState { ShiftSelection, Menu, MainView, DataError }` (in `app.h`). `tick()`
+drains all queued button presses (`handle*Button`, input-only, no drawing) then
+`render()`s the current screen. Screens repaint only when a `_dirty` flag is set
+(state or selection change); `MainView`'s map additionally redraws at 1 Hz.
+Boots into `ShiftSelection`. Transitions: ShiftSelection --Select--> MainView
+*(or DataError if the load fails)*; MainView --Select--> Menu; Menu
+{Resume→MainView, Change shift→ShiftSelection}; DataError --any button-->
+ShiftSelection. Reusable `drawButton()` (in `src/ui.{h,cpp}`) draws a labelled
+button, highlighted black-on-white when selected, white-on-black otherwise.
+
+**DataError screen:** selecting a shift runs `loadTimetable()`, which (a)
+`loadCategory`-loads the day's category, (b) runs `validateTimetable`, and (c)
+checks the shift's own train numbers all resolve. Any failure sets
+`_errorMessage`, logs it via `Serial`, clears `_timetable`, and routes to
+`DataError` (which shows the message + "pick another shift") instead of entering
+MainView with unusable data — so bad/incomplete CSVs can't crash the app. Since
+most per-train files are still empty, real shifts currently land here until the
+data is filled.
 
 **Clock overlay:** `App::drawClock()` draws the live time (HH:MM:SS, size 2) on
 *every* screen, redrawn whenever the second changes (independent of the `_dirty`
