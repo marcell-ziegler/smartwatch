@@ -8,7 +8,7 @@
 
 CXX      ?= g++
 CXXFLAGS := -std=gnu++17 -Wall -Wextra -I../include -I../src
-SRCS     := $(wildcard *.cpp) ../src/timetable.cpp
+SRCS     := $(wildcard *.cpp) ../src/timetable.cpp ../src/geo.cpp ../src/tracking.cpp
 HDRS     := $(wildcard *.h) ../src/timetable.h ../include/ClockTime.h
 BIN      := run_tests
 

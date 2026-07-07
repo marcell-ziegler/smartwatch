@@ -53,6 +53,19 @@ enum Role
     Konduktor
 };
 
+// A physical station on the line: its geographic centre and a capture radius
+// (metres) used to decide "am I at this station" from a GPS fix. `km` is the
+// distance-along-line marker from the paper graphs (0 until we have it).
+struct Station
+{
+    std::string signature; // short sig, e.g. "Uö"
+    std::string name;      // "Uppsala Östra"
+    double lat = 0.0;
+    double lon = 0.0;
+    double radius_m = 0.0; // GPS capture radius around the centre
+    double km = 0.0;       // along-line marker (optional; 0 if unknown)
+};
+
 // Represents a single stop in the timetable
 struct Stop
 {
@@ -131,6 +144,11 @@ namespace utils
     // string to be digits (no leading/trailing junk); nullopt otherwise.
     std::optional<uint16_t> parseUint16(const std::string &s);
 
+    // Parse a decimal string into a double (for lat/lon/radius). Requires the
+    // whole string to be consumed; nullopt on junk. Uses strtod, not
+    // std::from_chars<double> (unsupported by the esp32's GCC 8.4).
+    std::optional<double> parseDouble(const std::string &s);
+
     // Parse "H:MM"/"HH:MM" into a validated wall-clock time.
     std::optional<ClockTime> parseClockTime(const std::string &s);
 
@@ -165,11 +183,17 @@ std::optional<Role> roleForShiftNumber(int number);
 //    trains.csv  : number,vehicleType,direction,nextNumber (roster; no stops)
 //    stops.csv   : stationSignature,arrival,departure,stopType,exchangeType,
 //                  staffed,meets,remark                    (meets ';'-separated)
+//    stations.csv: signature,name,lat,lon,radius_m         (line-wide; loaded once)
 // ---------------------------------------------------------------------------
 std::optional<std::vector<SeasonalTimetableRule>> parseSeasonsCsv(const std::string &content);
 std::optional<std::vector<Shift>> parseShiftsCsv(const std::string &content);
 std::optional<std::vector<Train>> parseTrainsCsv(const std::string &content);
 std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content);
+std::optional<std::vector<Station>> parseStationsCsv(const std::string &content);
+
+// Look up a station by its signature (linear scan; ~14 stations). nullptr if
+// absent.
+const Station *findStation(const std::vector<Station> &stations, const std::string &signature);
 
 // ---------------------------------------------------------------------------
 //  Cross-record validation (desktop pre-flight). Row-level well-formedness is

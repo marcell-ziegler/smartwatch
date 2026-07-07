@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <cerrno>
 #include <utility>
 
 const Train *Timetable::findTrain(const std::string &number) const
@@ -145,6 +147,19 @@ namespace utils
         if (result.ec != std::errc() || result.ptr != s.data() + s.size())
             return std::nullopt;
         return value;
+    }
+
+    std::optional<double> parseDouble(const std::string &s)
+    {
+        if (s.empty())
+            return std::nullopt;
+        errno = 0;
+        char *end = nullptr;
+        const double v = std::strtod(s.c_str(), &end);
+        // Require the whole string consumed (no trailing junk) and no overflow.
+        if (errno != 0 || end != s.c_str() + s.size())
+            return std::nullopt;
+        return v;
     }
 
     // Parse "H:MM" / "HH:MM" into a validated time-of-day. Requires exactly
@@ -369,6 +384,45 @@ std::optional<std::vector<Stop>> parseStopsCsv(const std::string &content)
         out.push_back(std::move(s));
     }
     return out;
+}
+
+std::optional<std::vector<Station>> parseStationsCsv(const std::string &content)
+{
+    std::vector<Station> out;
+    for (const auto &line : utils::splitLines(content))
+    {
+        if (isCommentOrBlank(line))
+            continue;
+
+        auto f = utils::splitCsvLine(line);
+        if (f.size() != 5)
+            return std::nullopt;
+
+        auto lat = utils::parseDouble(f[2]);
+        auto lon = utils::parseDouble(f[3]);
+        auto radius = utils::parseDouble(f[4]);
+        if (f[0].empty() || !lat || !lon || !radius)
+            return std::nullopt;
+        if (*lat < -90.0 || *lat > 90.0 || *lon < -180.0 || *lon > 180.0 || *radius < 0.0)
+            return std::nullopt;
+
+        Station s;
+        s.signature = f[0];
+        s.name = f[1];
+        s.lat = *lat;
+        s.lon = *lon;
+        s.radius_m = *radius;
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+const Station *findStation(const std::vector<Station> &stations, const std::string &signature)
+{
+    auto it = std::find_if(stations.begin(), stations.end(),
+                           [&](const Station &s)
+                           { return s.signature == signature; });
+    return (it != stations.end()) ? &*it : nullptr;
 }
 
 // ---------------------------------------------------------------------------

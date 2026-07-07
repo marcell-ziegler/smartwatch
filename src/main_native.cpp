@@ -5,7 +5,7 @@
 //    W A S D      d-pad Up / Left / Down / Right     (emulated device buttons)
 //    Enter        Select / press                     (emulated device button)
 //    Arrow keys   nudge the GPS position (manual driving)
-//    R            toggle replay of assets/tracks/demo.csv
+//    R            toggle replay of assets/tracks/frg_uo.csv (Frg->Uö run)
 //    Esc / close  quit
 // ===========================================================================
 #include <SDL2/SDL.h>
@@ -23,7 +23,7 @@ int main(int, char**) {
         return 1;
     }
 
-    SimGps               gps("assets/tracks/demo.csv");
+    SimGps               gps("assets/tracks/frg_uo.csv"); // Frg->Uö along the real track
     SdlTouch             touch(SCALE);
     FolderTileStore      tiles("assets/tiles");
     SdlButtons           buttons;

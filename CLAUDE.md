@@ -224,10 +224,11 @@ data structures; all CSV parsers (`parseSeasonsCsv`, `parseShiftsCsv`,
 `parseTrainsCsv`, `parseStopsCsv`) + field converters; `Timetable::findTrain`;
 cross-record validators (`isValidIsoDate`, `validateSeasons`, `validateShifts`,
 `validateTimetable`); date helpers (`isoDayOfWeek`, `toIsoDate`,
-`categoryForDate`). The `App` state machine, clock overlay, and shift
-auto-loading (below) are wired end-to-end; `IGps::clock()` and both
-`ITimeTableStore` impls are done. Covered by the `tests/` suite (see conventions
-below). Both `pio run -e native` and `-e esp32` build clean. Real B-traffic data
+`categoryForDate`); the `geo` distance module, `stations.csv` parsing, and the
+`tracking` state machine (below). The `App` state machine, clock overlay, shift
+auto-loading, and timetable tracking are wired end-to-end; `IGps::clock()` and
+both `ITimeTableStore` impls are done. All of the pure logic is covered by the
+`tests/` suite (300 checks; see conventions below). Both `pio run -e native` and `-e esp32` build clean. Real B-traffic data
 is being entered by hand in `assets/timetables/`; the user is actively filling
 per-train files.
 
@@ -278,16 +279,38 @@ missing/empty/malformed stop file makes the whole load fail (`nullopt` →
 Note: most per-train CSVs are still empty, so `loadCategory` will currently fail
 for real categories until the data is filled.
 
+**Timetable tracking (implemented):** three pure, unit-tested modules feed the
+progress view.
+- `src/geo.{h,cpp}` — `distanceMeters` + `fractionAlongSegment` (equirectangular
+  straight-line for now; a polyline/along-track variant slots behind the same
+  interface using the KML "Banan" line later).
+- `Station` + `parseStationsCsv` (`signature,name,lat,lon,radius_m`, in
+  `assets/timetables/stations.csv`, all 14 stations filled) + `findStation`.
+- `src/tracking.{h,cpp}` — `initialTracking()` picks the active train from the
+  shift by **time-of-day** at shift entry; `advanceTracking()` then lets **GPS**
+  drive: you reach the next stop when inside its `radius_m` (monotonic — jitter
+  can't un-pass a stop), and reaching a train's final stop auto-loads the next
+  train in the shift. No fix → clock estimate while *waiting* for the first fix,
+  freeze after a fix is *lost*; `gpsLock` exposes which. Output `TrackingState`
+  has last/next/next-major stop indices (top = next departure-posted stop or
+  terminus, strictly after the middle) + `segmentProgress` (0..1).
+`App` loads `stations.csv` once at boot, inits `_tracking` on shift select, and
+recomputes it each 1 Hz in `renderMainView`. `App::drawLine()` renders it: three
+dots (last/next/next-major) with `SIG a<arr> d<dep>` labels, the last→next
+segment filled green by `segmentProgress` (white remainder), the next→major
+segment dotted, and a GPS-lock indicator. The whole day's category is loaded, so
+meets/other trains resolve.
+
 **Stubbed / not yet done:**
-- MainView doesn't yet *display* anything from `_timetable` (still just map +
-  clock); the timetable/meets/next-stop view is the next step.
-- `App::drawLine()` — declared, empty. Intended: progress along the line
-  (last/current/next stops as dots, completed segment green).
+- **Map polyline / real along-track distance + speed:** the KML "Banan" line is
+  captured (`assets/Lennakatten.kml`) but not yet parsed/used; tracking uses
+  straight-line distance and the map draws no track overlay.
+- Delay display (`actual − scheduled`) is deferred — labels show scheduled times
+  only for now.
 - Touch input is polled each tick but not acted on (navigation is button-based).
-- **No `stations.csv`** or station parser yet, though the `Station` struct
-  exists — station geo/km data still needs a home.
 - **Timezone:** `Esp32Gps::clock()` returns UTC; schedule times are Swedish
-  local (CET/CEST). Apply the local offset before the two build targets agree.
+  local (CET/CEST). Apply the local offset before the two build targets agree —
+  this affects time-of-day train selection and the clock on hardware.
 
 ## Known open decisions / caveats
 

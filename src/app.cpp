@@ -38,6 +38,26 @@ namespace
         return std::to_string(s.number) + s.trafficCategory;
     }
 
+    // Draws a stop's label next to a dot: "SIG a08:15 d08:35" (arrival/departure
+    // shown only when posted). Assumes text size/colour already set.
+    void drawStopLabel(Adafruit_GFX &gfx, int16_t x, int16_t y, const Stop &s)
+    {
+        std::string label = s.stationSignature;
+        char buf[16];
+        if (s.arrival)
+        {
+            snprintf(buf, sizeof(buf), " a%02d:%02d", (int)s.arrival->hours, (int)s.arrival->minutes);
+            label += buf;
+        }
+        if (s.departure)
+        {
+            snprintf(buf, sizeof(buf), " d%02d:%02d", (int)s.departure->hours, (int)s.departure->minutes);
+            label += buf;
+        }
+        gfx.setCursor(x, y - 3);
+        gfx.print(label.c_str());
+    }
+
     // lat/lon -> world pixel position at the given zoom (Web Mercator). This is
     // a continuous coordinate space -- tile (z,x,y) is just the TILE_PX-sized
     // chunk of it at [x*TILE_PX, y*TILE_PX].
@@ -64,6 +84,13 @@ void App::begin()
     _timetableStore.begin();
     _gfx.setRotation(0);
     _gfx.fillScreen(BLACK);
+
+    // Line-wide station geo (centre + radius), loaded once. Tracking degrades
+    // gracefully if this is missing (no progress fill), so don't hard-fail.
+    std::string stationsRaw;
+    if (_timetableStore.readFile("stations.csv", stationsRaw))
+        if (auto st = parseStationsCsv(stationsRaw))
+            _stations = std::move(*st);
 
     loadShiftSuggestions();
 
@@ -213,7 +240,17 @@ void App::handleShiftSelectionButton(Button b)
             _selectedShift = _shifts[_shiftIndex];
             // Load + validate the day's category; on bad data show the error
             // screen instead of entering MainView with an unusable timetable.
-            setState(loadTimetable() ? AppState::MainView : AppState::DataError);
+            if (loadTimetable())
+            {
+                // Time-of-day picks the active train; GPS takes over from here.
+                _tracking = initialTracking(_selectedShift, _timetable, _stations,
+                                            _gps.clock().timeOfDay());
+                setState(AppState::MainView);
+            }
+            else
+            {
+                setState(AppState::DataError);
+            }
         }
         break;
     default:
@@ -394,8 +431,9 @@ void App::renderMenu()
 void App::renderMainView(uint32_t now_ms)
 {
     const GpsFix fix = _gps.fix();
+    const bool full = _dirty;
 
-    if (_dirty)
+    if (full)
     {
         _dirty = false;
         _gfx.fillScreen(BLACK);
@@ -404,19 +442,16 @@ void App::renderMainView(uint32_t now_ms)
         _gfx.setCursor(MARGIN_X, MARGIN_Y);
         _gfx.print("Lennakatten");
         _gfx.setTextSize(BASE_TEXT_SIZE);
-        if (fix.valid)
-            drawMap(fix.lat, fix.lon);
-        _lastMapDraw = now_ms;
-        drawLine();
-        return;
     }
 
-    // Map / line redraw throttled to 1 Hz -- see README's product target.
-    if (now_ms - _lastMapDraw >= 1000)
+    // Map + tracking recompute + line, throttled to 1 Hz (also on entry).
+    if (full || now_ms - _lastMapDraw >= 1000)
     {
         _lastMapDraw = now_ms;
         if (fix.valid)
             drawMap(fix.lat, fix.lon);
+        _tracking = advanceTracking(_tracking, _selectedShift, _timetable, _stations,
+                                    fix, _gps.clock().timeOfDay());
         drawLine();
     }
 }
@@ -496,37 +531,60 @@ void App::drawMap(double lat, double lon)
 
 void App::drawLine()
 {
-    // Radius of a stop circle
     constexpr int STOP_RADIUS = 3;
-
     constexpr int LEFT_MARGIN = 10;
     constexpr int Y_MARGIN = 15;
-    static const int BOTTOM_STOP_Y = _gfx.height() - Y_MARGIN;
-    static const int MIDDLE_STOP_Y = _gfx.height() / 2;
-    constexpr int TOP_STOP_Y = Y_MARGIN + 20;
+    constexpr int TEXT_X = LEFT_MARGIN + 10;
 
-    constexpr int TEXT_MARGIN = 10;
+    const int bottomY = _gfx.height() - Y_MARGIN; // last stop (behind you)
+    const int middleY = _gfx.height() / 2;        // next stop
+    const int topY = Y_MARGIN + 20;               // next major stop
+    // Clear only the strip left of the map so we never erase the map/clock.
+    const int clearW = _gfx.width() - MAP_W;
 
-    // Clear area
-    _gfx.fillRect(0, TOP_STOP_Y - STOP_RADIUS, LEFT_MARGIN + 2 * STOP_RADIUS, (BOTTOM_STOP_Y + STOP_RADIUS) - (TOP_STOP_Y - STOP_RADIUS), BLACK);
+    _gfx.fillRect(0, topY - STOP_RADIUS - 1, clearW,
+                  (bottomY + 10) - (topY - STOP_RADIUS - 1), BLACK);
 
-    // Bottom line
-    // TODO: make gradually turn green
-    _gfx.drawLine(LEFT_MARGIN, BOTTOM_STOP_Y, LEFT_MARGIN, MIDDLE_STOP_Y, GREEN);
+    _gfx.setTextSize(1);
+    _gfx.setTextColor(WHITE);
 
-    // Top line
-    _gfx.drawLine(LEFT_MARGIN, MIDDLE_STOP_Y, LEFT_MARGIN, TOP_STOP_Y, WHITE);
+    const Train *train = _tracking.valid ? _timetable.findTrain(_tracking.activeTrain) : nullptr;
+    if (!train)
+    {
+        _gfx.setCursor(LEFT_MARGIN, middleY);
+        _gfx.print("No tracking");
+        return;
+    }
+    const int nStops = (int)train->stops.size();
+    auto valid = [&](int i)
+    { return i >= 0 && i < nStops; };
 
-    // Bottom Circle
-    _gfx.fillCircle(LEFT_MARGIN, BOTTOM_STOP_Y, STOP_RADIUS, WHITE);
+    // --- last -> next: solid, green up to progress, white for the rest ------
+    int greenEndY = bottomY - (int)(_tracking.segmentProgress * (bottomY - middleY));
+    if (greenEndY < middleY)
+        greenEndY = middleY;
+    if (greenEndY > bottomY)
+        greenEndY = bottomY;
+    _gfx.drawLine(LEFT_MARGIN, bottomY, LEFT_MARGIN, greenEndY, GREEN); // travelled
+    _gfx.drawLine(LEFT_MARGIN, greenEndY, LEFT_MARGIN, middleY, WHITE); // remaining
 
-    // Middle Circle
-    _gfx.fillCircle(LEFT_MARGIN, MIDDLE_STOP_Y, STOP_RADIUS, WHITE);
+    // --- next -> next-major: dotted -----------------------------------------
+    for (int yy = middleY; yy >= topY; yy -= 4)
+        _gfx.drawPixel(LEFT_MARGIN, yy, WHITE);
 
-    // Top Circle
-    _gfx.fillCircle(LEFT_MARGIN, TOP_STOP_Y, STOP_RADIUS, WHITE);
+    // --- dots + labels -------------------------------------------------------
+    _gfx.fillCircle(LEFT_MARGIN, bottomY, STOP_RADIUS, WHITE);
+    _gfx.fillCircle(LEFT_MARGIN, middleY, STOP_RADIUS, WHITE);
+    _gfx.fillCircle(LEFT_MARGIN, topY, STOP_RADIUS, WHITE);
 
-    _gfx.setCursor(LEFT_MARGIN + TEXT_MARGIN, BOTTOM_STOP_Y);
+    if (valid(_tracking.lastStopIdx))
+        drawStopLabel(_gfx, TEXT_X, bottomY, train->stops[_tracking.lastStopIdx]);
+    if (valid(_tracking.nextStopIdx))
+        drawStopLabel(_gfx, TEXT_X, middleY, train->stops[_tracking.nextStopIdx]);
+    if (valid(_tracking.nextMajorStopIdx))
+        drawStopLabel(_gfx, TEXT_X, topY, train->stops[_tracking.nextMajorStopIdx]);
 
-    _gfx.print(_timetable.findTrain(_selectedShift.trainNumbers[0])->stops[0].stationSignature.c_str());
+    // --- GPS-lock state (per your "make it visible" note) --------------------
+    _gfx.setCursor(LEFT_MARGIN, bottomY + 8);
+    _gfx.print(_tracking.gpsLock ? "GPS ok" : "no GPS");
 }

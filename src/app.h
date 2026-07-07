@@ -10,6 +10,7 @@
 #include "hal/IButtons.h"
 #include "hal/ITimeTableStore.h"
 #include "timetable.h"
+#include "tracking.h"
 
 // Top-level screens. The app always boots into ShiftSelection.
 enum class AppState
@@ -53,7 +54,9 @@ private:
     Shift _selectedShift; // e.g. "31B" (empty until one is chosen)
 
     // Timetable tracking
-    Timetable _timetable;
+    Timetable _timetable;                // the selected day's category (all trains)
+    std::vector<Station> _stations;      // line-wide station geo, loaded once at boot
+    TrackingState _tracking;             // where we are along the active train's run
 
     // Menu: fixed list of actions.
     int _menuIndex = 0;
