@@ -62,6 +62,10 @@ private:
     // Populates _shifts for the current day using _timetables + _gps.clock().
     void loadShiftSuggestions();
 
+    // Loads the whole selected category (all trains + their stops) into
+    // _timetable. Clears _timetable on failure (missing/incomplete data).
+    void loadTimetable();
+
     // Input handling: mutate state for one button press; no drawing here.
     void handleButton(Button b);
     void handleShiftSelectionButton(Button b);

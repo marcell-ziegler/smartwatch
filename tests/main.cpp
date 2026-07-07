@@ -9,6 +9,7 @@ void test_record_parsers();
 void test_validation();
 void test_findtrain();
 void test_dates();
+void test_loadcategory();
 
 int main()
 {
@@ -20,6 +21,7 @@ int main()
     test_validation();
     test_findtrain();
     test_dates();
+    test_loadcategory();
 
     std::printf("\n%d checks, %d failure(s)\n", tf::checks, tf::failures);
     return tf::failures == 0 ? 0 : 1;

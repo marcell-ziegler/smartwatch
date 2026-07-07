@@ -213,3 +213,18 @@ std::vector<std::string> validateShifts(const std::vector<Shift> &shifts);
 // station repeated within one train; every nextNumber and every meets entry
 // resolves to a train in this category's roster.
 std::vector<std::string> validateTimetable(const Timetable &tt);
+
+// ---------------------------------------------------------------------------
+//  Category assembly: roster + every train's stops -> one in-RAM Timetable.
+// ---------------------------------------------------------------------------
+class ITimeTableStore; // defined in hal/ITimeTableStore.h
+
+// Loads a whole traffic category into a Timetable: reads "<category>/trains.csv"
+// for the roster, then "<category>/<number>.csv" for each train's stops.
+//
+// A train is only valid with a fully populated stop list, so this returns
+// nullopt if trains.csv is missing/malformed, or if ANY train's stop file is
+// missing, malformed, or empty. On success every returned Train has its stops.
+// (Cross-record checks like meet/nextNumber resolution are separate --
+// run validateTimetable() on the result if you want them.)
+std::optional<Timetable> loadCategory(ITimeTableStore &store, const std::string &category);

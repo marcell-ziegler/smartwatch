@@ -1,4 +1,5 @@
 #include "timetable.h"
+#include "hal/ITimeTableStore.h"
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -522,4 +523,40 @@ std::vector<std::string> validateTimetable(const Timetable &tt)
                                    "' is not a train in this category");
     }
     return errs;
+}
+
+std::optional<Timetable> loadCategory(ITimeTableStore &store, const std::string &category)
+{
+    if (category.empty())
+        return std::nullopt;
+
+    std::string trainsRaw;
+    if (!store.readFile((category + "/trains.csv").c_str(), trainsRaw))
+        return std::nullopt;
+
+    auto roster = parseTrainsCsv(trainsRaw);
+    if (!roster)
+        return std::nullopt;
+
+    Timetable tt;
+    tt.trafficCategory = category;
+    tt.trains = std::move(*roster);
+
+    // parseTrainsCsv only fills the roster fields; each train's stops live in
+    // "<category>/<number>.csv". A train without a populated stop list is
+    // invalid, so a missing / malformed / empty stop file fails the whole load.
+    for (auto &train : tt.trains)
+    {
+        std::string stopsRaw;
+        if (!store.readFile((category + "/" + train.number + ".csv").c_str(), stopsRaw))
+            return std::nullopt;
+
+        auto stops = parseStopsCsv(stopsRaw);
+        if (!stops || stops->empty())
+            return std::nullopt;
+
+        train.stops = std::move(*stops);
+    }
+
+    return tt;
 }

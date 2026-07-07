@@ -100,6 +100,15 @@ void App::loadShiftSuggestions()
     }
 }
 
+void App::loadTimetable()
+{
+    // Load the entire day's category (every train, fully populated with stops)
+    // so that meets/nextNumber references all resolve. The shift's own trains
+    // are then found within it via _timetable.findTrain(number).
+    auto tt = loadCategory(_timetableStore, _selectedShift.trafficCategory);
+    _timetable = tt ? std::move(*tt) : Timetable{};
+}
+
 void App::tick(uint32_t now_ms)
 {
     _gps.update();
@@ -164,9 +173,7 @@ void App::handleShiftSelectionButton(Button b)
         if (n > 0)
         {
             _selectedShift = _shifts[_shiftIndex];
-            // TODO: load the chosen shift's category Timetable (loadCategory)
-            // for MainView to display timetable/meets.
-
+            loadTimetable(); // load the whole day's category into _timetable
             setState(AppState::MainView);
         }
         break;

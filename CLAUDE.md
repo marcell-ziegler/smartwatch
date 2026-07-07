@@ -251,12 +251,21 @@ in `timetable.cpp`), and lists that category's shifts (labelled `"<number><cat>"
 e.g. `31B`). Falls back to listing *all* shifts if the date can't be resolved
 (e.g. GPS cold start), and shows "No shifts for today" if the list is empty.
 
+**Shift → timetable load:** selecting a shift stores it (`_selectedShift`) and
+calls `App::loadTimetable()` → `loadCategory(store, category)` (in
+`timetable.cpp`), which reads `<cat>/trains.csv` for the roster then
+`<cat>/<number>.csv` for **every** train's stops, assembling one in-RAM
+`Timetable` (`App::_timetable`). The whole day's category is loaded (not just the
+shift's trains) so meets/nextNumber references resolve; the shift's own trains
+are then found via `_timetable.findTrain(number)`. A train with a
+missing/empty/malformed stop file makes the whole load fail (`nullopt` →
+`_timetable` cleared) — a `Train` is only valid with a populated stop list.
+Note: most per-train CSVs are still empty, so `loadCategory` will currently fail
+for real categories until the data is filled.
+
 **Stubbed / not yet done:**
-- Selecting a shift stores it (`_selectedShift`) but does **not** yet load that
-  category's full `Timetable` (roster + per-train stops) — `loadCategory` still
-  needs writing, and MainView shows only the map + clock, no timetable/meets.
-- `loadCategory` — the assembly step (roster + per-train stops → a `Timetable`
-  in RAM) is not written; `App` only knows the selected shift's label so far.
+- MainView doesn't yet *display* anything from `_timetable` (still just map +
+  clock); the timetable/meets/next-stop view is the next step.
 - `App::drawLine()` — declared, empty. Intended: progress along the line
   (last/current/next stops as dots, completed segment green).
 - Touch input is polled each tick but not acted on (navigation is button-based).
