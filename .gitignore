@@ -3,3 +3,6 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+# clangd compilation DB: machine-specific absolute paths, regenerate per machine
+# with `pio run -e native -t compiledb`
+compile_commands.json

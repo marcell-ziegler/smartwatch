@@ -9,6 +9,7 @@
 #include "hal/ITileStore.h"
 #include "hal/IButtons.h"
 #include "hal/ITimeTableStore.h"
+#include "timetable.h"
 
 // Top-level screens. The app always boots into ShiftSelection.
 enum class AppState
@@ -35,7 +36,7 @@ private:
     ITouch &_touch;
     ITileStore &_tiles;
     IButtons &_buttons;
-    ITimeTableStore &_timetables;
+    ITimeTableStore &_timetableStore;
 
     AppState _state = AppState::ShiftSelection;
     bool _dirty = true; // current screen needs a full repaint
@@ -46,9 +47,12 @@ private:
     // ShiftSelection: shifts suggested for today, from seasons.csv (today's
     // category, via the GPS/RTC date) + shifts.csv. If the date can't be
     // resolved, falls back to listing every shift.
-    std::vector<std::string> _shifts;
+    std::vector<Shift> _shifts;
     int _shiftIndex = 0;
-    std::string _selectedShift; // e.g. "31B" (empty until one is chosen)
+    Shift _selectedShift; // e.g. "31B" (empty until one is chosen)
+
+    // Timetable tracking
+    Timetable _timetable;
 
     // Menu: fixed list of actions.
     int _menuIndex = 0;

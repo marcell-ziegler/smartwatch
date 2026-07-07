@@ -31,6 +31,12 @@ namespace
     constexpr int16_t BTN_H = 24;
     constexpr int16_t BTN_GAP = 4;
 
+    // Short display label for a shift, e.g. Shift{31, "B", ...} -> "31B".
+    std::string shiftLabel(const Shift &s)
+    {
+        return std::to_string(s.number) + s.trafficCategory;
+    }
+
     // lat/lon -> world pixel position at the given zoom (Web Mercator). This is
     // a continuous coordinate space -- tile (z,x,y) is just the TILE_PX-sized
     // chunk of it at [x*TILE_PX, y*TILE_PX].
@@ -90,7 +96,7 @@ void App::loadShiftSuggestions()
     {
         if (category && s.trafficCategory != *category)
             continue;
-        _shifts.push_back(std::to_string(s.number) + s.trafficCategory);
+        _shifts.push_back(s); // keep the whole Shift (number, category, trains)
     }
 }
 
@@ -160,6 +166,7 @@ void App::handleShiftSelectionButton(Button b)
             _selectedShift = _shifts[_shiftIndex];
             // TODO: load the chosen shift's category Timetable (loadCategory)
             // for MainView to display timetable/meets.
+
             setState(AppState::MainView);
         }
         break;
@@ -280,7 +287,7 @@ void App::renderShiftSelection()
     for (int i = 0; i < (int)_shifts.size(); ++i)
     {
         drawButton(_gfx, MARGIN_X, y, w - 2 * MARGIN_X, BTN_H,
-                   _shifts[i].c_str(), i == _shiftIndex);
+                   shiftLabel(_shifts[i]).c_str(), i == _shiftIndex);
         y += BTN_H + BTN_GAP;
     }
 }
