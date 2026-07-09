@@ -595,17 +595,21 @@ void App::drawMap(double lat, double lon)
     // heap, not the linker's static-data segment.
     static uint16_t *tileBuf = new uint16_t[TILE_WORDS];
 
-    _gfx.startWrite();
-
-    // Background fill first: covers any tile that's missing from the
-    // pre-converted ribbon (loadTile() returns false) so stale pixels from
+    // Background fill first (its own transaction): covers any tile missing from
+    // the pre-converted ribbon (loadTile() returns false) so stale pixels from
     // a previous draw don't linger there.
+    _gfx.startWrite();
     _gfx.writeFillRect(mapX0, mapY0, MAP_W, MAP_H, 0x0000);
+    _gfx.endWrite();
 
     for (int ty = tileYMin; ty <= tileYMax; ++ty)
     {
         for (int tx = tileXMin; tx <= tileXMax; ++tx)
         {
+            // The SD card and the display share the SPI bus, so the tile read
+            // must NOT happen inside a display startWrite()/endWrite() -- that
+            // nests SPI.beginTransaction() and deadlocks. Read first, then open
+            // a display transaction to blit.
             if (!_tiles.loadTile(ZOOM, tx, ty, tileBuf))
                 continue;
 
@@ -620,6 +624,7 @@ void App::drawMap(double lat, double lon)
             // (mapX0, mapY0+MAP_H) are internal boundaries, not screen edges,
             // so the generic drawPixel clipping alone would let an
             // overhanging tile bleed into the panel around it.
+            _gfx.startWrite();
             for (int16_t row = 0; row < TILE_PX; ++row)
             {
                 const int16_t sy = tileScreenY + row;
@@ -633,13 +638,13 @@ void App::drawMap(double lat, double lon)
                     _gfx.writePixel(sx, sy, tileBuf[row * TILE_PX + col]);
                 }
             }
+            _gfx.endWrite();
         }
     }
 
-    // Position marker: always dead center of the map rectangle.
+    // Position marker: always dead center. fillCircle self-brackets its own
+    // transaction, so it must be OUTSIDE any manual startWrite()/endWrite().
     _gfx.fillCircle(mapX0 + MAP_W / 2, mapY0 + MAP_H / 2, 3, MARKER_COLOR);
-
-    _gfx.endWrite();
 }
 
 void App::drawLine()
