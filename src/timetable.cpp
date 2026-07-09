@@ -439,15 +439,22 @@ bool isValidIsoDate(const std::string &s)
     const int year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
     const int month = (s[5] - '0') * 10 + (s[6] - '0');
     const int day = (s[8] - '0') * 10 + (s[9] - '0');
-    if (month < 1 || month > 12)
-        return false;
 
-    static const int mdays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    int dmax = mdays[month - 1];
-    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    if (month == 2 && leap)
-        dmax = 29;
-    return day >= 1 && day <= dmax;
+    const int dmax = daysInMonth(year, month);
+    return dmax != 0 && day >= 1 && day <= dmax;
+}
+
+int daysInMonth(int year, int month)
+{
+    static const int md[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12)
+        return 0;
+    if (month == 2)
+    {
+        const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        return leap ? 29 : 28;
+    }
+    return md[month - 1];
 }
 
 int isoDayOfWeek(int year, int month, int day)
@@ -477,6 +484,58 @@ std::optional<std::string> categoryForDate(const std::vector<SeasonalTimetableRu
         if (r.dayOfWeek == weekday && r.validFrom <= today && today <= r.validTo)
             return r.trafficCategory;
     return std::nullopt;
+}
+
+int stockholmUtcOffsetHours(int year, int month, int day, int hour)
+{
+    if (month < 3 || month > 10)
+        return 1; // Nov..Feb -> CET
+    if (month > 3 && month < 10)
+        return 2; // Apr..Sep -> CEST
+
+    // March / October: DST switches at 01:00 UTC on the last Sunday.
+    int lastSun = 31;
+    while (isoDayOfWeek(year, month, lastSun) != 7)
+        --lastSun;
+
+    if (month == 3) // spring forward: CET before the switch, CEST after
+    {
+        if (day != lastSun)
+            return day > lastSun ? 2 : 1;
+        return hour >= 1 ? 2 : 1;
+    }
+    // October, fall back: CEST before the switch, CET after
+    if (day != lastSun)
+        return day < lastSun ? 2 : 1;
+    return hour >= 1 ? 1 : 2;
+}
+
+GpsClock utcToStockholm(const GpsClock &utc)
+{
+    GpsClock c = utc;
+    if (!c.valid)
+        return c;
+
+    const int off = stockholmUtcOffsetHours(c.year, c.month, c.day, c.hour);
+    int y = c.year, m = c.month, d = c.day, h = (int)c.hour + off;
+    while (h >= 24)
+    {
+        h -= 24;
+        if (++d > daysInMonth(y, m))
+        {
+            d = 1;
+            if (++m > 12)
+            {
+                m = 1;
+                ++y;
+            }
+        }
+    }
+    c.year = (uint16_t)y;
+    c.month = (uint8_t)m;
+    c.day = (uint8_t)d;
+    c.hour = (uint8_t)h; // minute/second unchanged (whole-hour offset)
+    return c;
 }
 
 std::vector<std::string> validateSeasons(const std::vector<SeasonalTimetableRule> &rules)

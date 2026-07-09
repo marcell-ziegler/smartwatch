@@ -17,7 +17,9 @@ static constexpr int SCALE = 2;
 static constexpr double STEP = 0.0004;   // ~40 m per key press
 
 int main(int, char**) {
-    PCDisplay display(320, 240, SCALE);
+    // Native panel dims match Adafruit_ILI9341 (240x320); the app's
+    // setRotation(1) then yields a 320x240 landscape view, same as hardware.
+    PCDisplay display(240, 320, SCALE);
     if (!display.begin("Railway watch (sim)")) {
         SDL_Log("display init failed");
         return 1;

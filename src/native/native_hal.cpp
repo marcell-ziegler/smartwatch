@@ -6,6 +6,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include "timetable.h"   // utcToStockholm (also pulls STL; keep before Arduino.h)
 
 #include <SDL2/SDL.h>
 #include <Arduino.h>   // millis()
@@ -61,10 +62,12 @@ void SimGps::toggleReplay() {
 }
 
 GpsClock SimGps::clock() const {
-    // Desktop stand-in for the module's RTC: the host's local wall clock.
+    // Stand-in for the module's RTC: read the host clock as UTC (like the real
+    // GPS) then convert to Stockholm local, so the sim matches hardware
+    // regardless of the dev machine's own timezone.
     const std::time_t t = std::time(nullptr);
     std::tm tm{};
-    localtime_r(&t, &tm);
+    gmtime_r(&t, &tm);
     GpsClock c;
     c.valid  = true;
     c.year   = (uint16_t)(tm.tm_year + 1900);
@@ -73,7 +76,7 @@ GpsClock SimGps::clock() const {
     c.hour   = (uint8_t)tm.tm_hour;
     c.minute = (uint8_t)tm.tm_min;
     c.second = (uint8_t)tm.tm_sec;
-    return c;
+    return utcToStockholm(c);
 }
 
 // ---------------------------------------------------------------------------

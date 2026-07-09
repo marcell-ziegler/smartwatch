@@ -57,4 +57,52 @@ void test_dates()
         CHECK(isoDayOfWeek(2026, 7, 6) == 1);
         CHECK(!categoryForDate(rules, 2026, 7, 6).has_value());
     }
+
+    SECTION("daysInMonth");
+    CHECK(daysInMonth(2026, 1) == 31);
+    CHECK(daysInMonth(2026, 2) == 28);
+    CHECK(daysInMonth(2024, 2) == 29); // leap
+    CHECK(daysInMonth(2000, 2) == 29); // 400-year leap
+    CHECK(daysInMonth(1900, 2) == 28); // 100-year non-leap
+    CHECK(daysInMonth(2026, 4) == 30);
+    CHECK(daysInMonth(2026, 13) == 0);
+
+    SECTION("stockholmUtcOffsetHours");
+    // Deep winter / summer.
+    CHECK(stockholmUtcOffsetHours(2026, 1, 15, 12) == 1); // CET
+    CHECK(stockholmUtcOffsetHours(2026, 7, 15, 12) == 2); // CEST
+    // 2026 spring switch is last Sunday of March = the 29th, at 01:00 UTC.
+    CHECK(stockholmUtcOffsetHours(2026, 3, 28, 12) == 1); // day before -> CET
+    CHECK(stockholmUtcOffsetHours(2026, 3, 29, 0) == 1);  // before 01:00 UTC -> CET
+    CHECK(stockholmUtcOffsetHours(2026, 3, 29, 1) == 2);  // at 01:00 UTC -> CEST
+    CHECK(stockholmUtcOffsetHours(2026, 3, 30, 12) == 2); // day after -> CEST
+    // 2026 autumn switch is last Sunday of October = the 25th, at 01:00 UTC.
+    CHECK(stockholmUtcOffsetHours(2026, 10, 24, 12) == 2); // day before -> CEST
+    CHECK(stockholmUtcOffsetHours(2026, 10, 25, 0) == 2);  // before 01:00 UTC -> CEST
+    CHECK(stockholmUtcOffsetHours(2026, 10, 25, 1) == 1);  // at 01:00 UTC -> CET
+    CHECK(stockholmUtcOffsetHours(2026, 10, 26, 12) == 1); // day after -> CET
+
+    SECTION("utcToStockholm");
+    {
+        // Summer: +2h.
+        GpsClock u; u.valid = true;
+        u.year = 2026; u.month = 7; u.day = 5; u.hour = 8; u.minute = 5; u.second = 9;
+        GpsClock l = utcToStockholm(u);
+        CHECK(l.hour == 10 && l.minute == 5 && l.second == 9);
+        CHECK(l.year == 2026 && l.month == 7 && l.day == 5);
+
+        // Winter: +1h.
+        u.month = 1; u.day = 15; u.hour = 8;
+        CHECK(utcToStockholm(u).hour == 9);
+
+        // Rollover across midnight (and month end): 2026-07-31 23:30 UTC -> +2h.
+        u.month = 7; u.day = 31; u.hour = 23; u.minute = 30;
+        GpsClock r = utcToStockholm(u);
+        CHECK(r.hour == 1 && r.minute == 30);
+        CHECK(r.month == 8 && r.day == 1); // rolled into August
+
+        // Invalid clock passes through untouched.
+        GpsClock inv; inv.valid = false; inv.hour = 8;
+        CHECK(utcToStockholm(inv).hour == 8 && !utcToStockholm(inv).valid);
+    }
 }

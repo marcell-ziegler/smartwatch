@@ -18,7 +18,8 @@ enum class AppState
     ShiftSelection,
     Menu,
     MainView,
-    DataError // shift/train/timetable data was invalid; prompt for another shift
+    DataError, // shift/train/timetable data was invalid; prompt for another shift
+    GpsDebug   // live GPS fix + RTC clock readout, for diagnosing the GPS
 };
 
 // The application. Shared verbatim between the esp32 and native build
@@ -44,7 +45,8 @@ private:
     bool _dirty = true; // current screen needs a full repaint
 
     uint32_t _lastMapDraw = 0;
-    int _lastClockSec = -2; // last second value the clock was drawn for
+    uint32_t _lastDebugDraw = 0; // GpsDebug live-readout refresh throttle
+    int _lastClockSec = -2;      // last second value the clock was drawn for
 
     // ShiftSelection: shifts suggested for today, from seasons.csv (today's
     // category, via the GPS/RTC date) + shifts.csv. If the date can't be
@@ -82,6 +84,7 @@ private:
     void handleMenuButton(Button b);
     void handleMainViewButton(Button b);
     void handleDataErrorButton(Button b);
+    void handleGpsDebugButton(Button b);
 
     // Rendering: paint the current screen (honours _dirty; MainView's map is
     // additionally throttled to 1 Hz).
@@ -90,6 +93,8 @@ private:
     void renderMenu();
     void renderMainView(uint32_t now_ms);
     void renderDataError();
+    void renderGpsDebug();          // static chrome (on _dirty)
+    void drawGpsDebugValues();      // live fix + clock block, refreshed at 1 Hz
 
     // Draws the live clock. Position depends on state: bottom-right (below the
     // map) in MainView, top-right in the menus. Redrawn once per second.

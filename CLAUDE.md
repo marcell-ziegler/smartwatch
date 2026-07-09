@@ -12,8 +12,12 @@ The device shows the time, a live 1 Hz map of the train's position along the
 line, and the timetable for the user's current shift.
 
 **Hardware target:** Adafruit Feather ESP32 V2 + 2.4" TFT FeatherWing
-(ILI9341 display + STMPE610 resistive touch), a PA1010D UART GPS (with a
-battery-backed RTC), and a MAX17048 I²C battery gauge. Development happens in
+(ILI9341 display over SPI + TSC2007 resistive touch on **I2C**), a PA1010D GPS on **I2C**
+(STEMMA QT, addr `0x10`, with a battery-backed RTC), and a MAX17048 I²C battery
+gauge. Pin map is documented at the top of `src/main_esp32.cpp` (verified
+against the V2 pinout: SPI CS pins for display/touch/SD, GPIO for the 5-way
+d-pad, I2C SDA 22/SCL 20 shared by GPS + gauge; avoids flash 6-11, input-only
+34/36/39/37, and strapping 0/2/12). Development happens in
 VS Code / PlatformIO. The user is an experienced programmer but **new to
 embedded C++ and Arduino** — explain embedded-specific reasoning, don't assume
 it.
@@ -40,8 +44,8 @@ own concrete drivers and hands them to the same `App`:
 
 | Seam | native impl | esp32 impl |
 |---|---|---|
-| `IGps` | `SimGps` (CSV replay + arrow-key nudge; `clock()` = host clock) | `Esp32Gps` (TinyGPSPlus/UART; `clock()` = GPS RTC) |
-| `ITouch` | `SdlTouch` (mouse) | `Esp32Touch` (STMPE610) |
+| `IGps` | `SimGps` (CSV replay + arrow-key nudge; `clock()` = host clock) | `Esp32Gps` (Adafruit_GPS/PA1010D over I2C; `clock()` = GPS RTC) |
+| `ITouch` | `SdlTouch` (mouse) | `Esp32Touch` (TSC2007 over I2C) |
 | `IButtons` | `SdlButtons` (WASD + Enter) | `Esp32Buttons` (GPIO d-pad; placeholder pins) |
 | `ITileStore` | `FolderTileStore` | `SdTileStore` (SD card) |
 | `ITimeTableStore` | `FolderTimetableStore` (`assets/timetables/`) | `SdTimetableStore` (`/timetables/` on SD) |
@@ -50,10 +54,11 @@ own concrete drivers and hands them to the same `App`:
 `IGps::clock()` returns a `GpsClock` (date + h/m/s + validity), tracked
 separately from `fix()` because the RTC keeps time before a position fix. It
 drives the always-on clock overlay and the "what category runs today" lookup.
-**Caveat:** the GPS module reports **UTC**; the schedule is Swedish local time
-(CET/CEST) — `Esp32Gps::clock()` has a TODO to apply the local offset. The
-simulator's `SimGps::clock()` already uses host *local* time, so the two
-targets currently disagree by the UTC offset until that's done.
+Both impls return **Stockholm local time**: the GPS module reports UTC, and
+`clock()` runs it through `utcToStockholm()` (in `timetable.cpp` —
+`stockholmUtcOffsetHours` applies CET/CEST with EU DST rules, rolling the date
+over if needed). `SimGps` reads the host clock as UTC (`gmtime_r`) then converts
+too, so the sim matches hardware regardless of the dev machine's own timezone.
 
 `ITimeTableStore` is just `readFile(path, out)` (raw bytes); parsing lives in
 `src/timetable.cpp`. Paths are relative to the timetables root
@@ -135,8 +140,11 @@ Key ideas:
   pattern — the standard embedded "check elapsed millis" idiom (there is no
   async; `loop()`/`tick()` is a busy loop).
 
-Note: the user set `setRotation(0)` in `begin()` themselves ("fixed the
-orientation") — leave it.
+Note: `begin()` uses `setRotation(1)` = **landscape 320×240**. The sim's
+`PCDisplay` is constructed with the ILI9341's *native* dims (240×320) so
+`width()/height()` track rotation exactly like hardware; it stores/shows the
+logical (post-rotation) view and resizes the SDL window when rotation changes.
+So the sim now shows landscape at rotation 1 just like the panel.
 
 ## Tiles (map data)
 
@@ -233,7 +241,12 @@ is being entered by hand in `assets/timetables/`; the user is actively filling
 per-train files.
 
 **App structure:** `App` is a small state machine over
-`AppState { ShiftSelection, Menu, MainView, DataError }` (in `app.h`). `tick()`
+`AppState { ShiftSelection, Menu, MainView, DataError, GpsDebug }` (in `app.h`).
+ShiftSelection scrolls (windowed list clamped around `_shiftIndex`, with CP437
+up/down arrows). The Menu has a **GPS / Clock** item → `GpsDebug`, a live readout
+of `_gps.clock()` + `_gps.fix()` (refreshed ~2×/sec) for diagnosing the GPS:
+"Clock: -- no time" means the module isn't talking (I2C); "Fix: NO FIX" with a
+valid clock means it's talking but hasn't locked satellites. `tick()`
 drains all queued button presses (`handle*Button`, input-only, no drawing) then
 `render()`s the current screen. Screens repaint only when a `_dirty` flag is set
 (state or selection change); `MainView`'s map additionally redraws at 1 Hz.
@@ -256,8 +269,8 @@ data is filled.
 *every* screen, redrawn whenever the second changes (independent of the `_dirty`
 full-repaints, so menus don't flicker). Position is state-dependent: bottom-right
 (below the map) in MainView, top-right in the menus. Note the top-right menu
-clock can collide with a long title on a 240px-wide panel (the real ILI9341 at
-rotation 0) — fine on the 320px sim; tune when hardware layout is finalised.
+clock sits at the top-right; the screen is 320×240 landscape on both sim and
+hardware (rotation 1), so layout is now consistent between the two.
 
 **Shift auto-loading:** `App::loadShiftSuggestions()` (called on boot and on
 re-entry to ShiftSelection) reads `seasons.csv` + `shifts.csv` via
@@ -308,9 +321,6 @@ meets/other trains resolve.
 - Delay display (`actual − scheduled`) is deferred — labels show scheduled times
   only for now.
 - Touch input is polled each tick but not acted on (navigation is button-based).
-- **Timezone:** `Esp32Gps::clock()` returns UTC; schedule times are Swedish
-  local (CET/CEST). Apply the local offset before the two build targets agree —
-  this affects time-of-day train selection and the clock on hardware.
 
 ## Known open decisions / caveats
 

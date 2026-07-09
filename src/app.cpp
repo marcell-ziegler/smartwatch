@@ -24,7 +24,7 @@ namespace
     constexpr uint16_t GREEN = 0x47AD;
 
     // Menu actions, in display order.
-    const char *const MENU_ITEMS[] = {"Resume", "Change shift"};
+    const char *const MENU_ITEMS[] = {"Resume", "Change shift", "GPS / Clock"};
     constexpr int MENU_COUNT = (int)(sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]));
 
     // Shared list layout.
@@ -82,7 +82,7 @@ void App::begin()
     _gps.begin();
     _buttons.begin();
     _timetableStore.begin();
-    _gfx.setRotation(0);
+    _gfx.setRotation(1);
     _gfx.cp437(true); // true CP437 charset, so transcoded å/ä/ö render correctly
     _gfx.fillScreen(BLACK);
 
@@ -213,6 +213,9 @@ void App::handleButton(Button b)
     case AppState::DataError:
         handleDataErrorButton(b);
         break;
+    case AppState::GpsDebug:
+        handleGpsDebugButton(b);
+        break;
     }
 }
 
@@ -272,10 +275,12 @@ void App::handleMenuButton(Button b)
         _dirty = true;
         break;
     case Button::Select:
-        if (_menuIndex == 0)
-            setState(AppState::MainView); // Resume
-        else
-            setState(AppState::ShiftSelection); // Change shift
+        switch (_menuIndex)
+        {
+        case 0: setState(AppState::MainView); break;       // Resume
+        case 1: setState(AppState::ShiftSelection); break; // Change shift
+        case 2: setState(AppState::GpsDebug); break;       // GPS / Clock
+        }
         break;
     default:
         break;
@@ -295,6 +300,12 @@ void App::handleDataErrorButton(Button b)
 {
     (void)b; // any press returns to shift selection to pick another
     setState(AppState::ShiftSelection);
+}
+
+void App::handleGpsDebugButton(Button b)
+{
+    (void)b; // any press returns to the menu
+    setState(AppState::Menu);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +329,9 @@ void App::render(uint32_t now_ms)
     case AppState::DataError:
         renderDataError();
         break;
+    case AppState::GpsDebug:
+        renderGpsDebug();
+        break;
     }
 
     // Clock overlay: redraw when the second changes (or after a full repaint
@@ -328,6 +342,14 @@ void App::render(uint32_t now_ms)
     {
         _lastClockSec = sec;
         drawClock(c);
+    }
+
+    // GpsDebug readout refreshes ~2x/sec regardless of clock validity (the
+    // clock being invalid is exactly what you may be diagnosing).
+    if (_state == AppState::GpsDebug && (wasDirty || now_ms - _lastDebugDraw >= 500))
+    {
+        _lastDebugDraw = now_ms;
+        drawGpsDebugValues();
     }
 }
 
@@ -376,12 +398,45 @@ void App::renderShiftSelection()
         return;
     }
 
+    // Scrolling window: show a slice of the list around the selection so it's
+    // always visible even when there are more shifts than fit on screen.
+    const int n = (int)_shifts.size();
+    const int rowH = BTN_H + BTN_GAP;
+    int maxVisible = (_gfx.height() - LIST_TOP - 8) / rowH;
+    if (maxVisible < 1)
+        maxVisible = 1;
+
+    int first = 0;
+    if (n > maxVisible)
+    {
+        first = _shiftIndex - maxVisible / 2; // keep the selection centred-ish
+        if (first < 0)
+            first = 0;
+        if (first > n - maxVisible)
+            first = n - maxVisible;
+    }
+    const int last = (first + maxVisible < n) ? first + maxVisible : n;
+
     int16_t y = LIST_TOP;
-    for (int i = 0; i < (int)_shifts.size(); ++i)
+    for (int i = first; i < last; ++i)
     {
         drawButton(_gfx, MARGIN_X, y, w - 2 * MARGIN_X, BTN_H,
                    shiftLabel(_shifts[i]).c_str(), i == _shiftIndex);
-        y += BTN_H + BTN_GAP;
+        y += rowH;
+    }
+
+    // More-above / more-below arrows (CP437 up/down triangles).
+    _gfx.setTextSize(1);
+    _gfx.setTextColor(WHITE);
+    if (first > 0)
+    {
+        _gfx.setCursor(w - 12, LIST_TOP - 9);
+        _gfx.write(0x1E);
+    }
+    if (last < n)
+    {
+        _gfx.setCursor(w - 12, _gfx.height() - 9);
+        _gfx.write(0x1F);
     }
 }
 
@@ -405,6 +460,63 @@ void App::renderDataError()
 
     _gfx.setCursor(MARGIN_X, _gfx.height() - 20);
     _gfx.print("Press any key to pick another shift");
+}
+
+void App::renderGpsDebug()
+{
+    if (!_dirty)
+        return;
+    _dirty = false;
+
+    // Static chrome only; the live values are drawn by drawGpsDebugValues(),
+    // which render() calls on entry and then ~2x/sec.
+    _gfx.fillScreen(BLACK);
+    _gfx.setTextColor(WHITE);
+    _gfx.setTextSize(2);
+    _gfx.setCursor(MARGIN_X, MARGIN_Y);
+    _gfx.print("GPS / Clock");
+    _gfx.setTextSize(BASE_TEXT_SIZE);
+}
+
+void App::drawGpsDebugValues()
+{
+    const int16_t x = MARGIN_X;
+    int16_t y = LIST_TOP;
+
+    // Clear just the value area (below the title / clock overlay).
+    _gfx.fillRect(0, LIST_TOP, _gfx.width(), _gfx.height() - LIST_TOP, BLACK);
+    _gfx.setTextSize(1);
+    _gfx.setTextColor(WHITE);
+
+    const GpsClock c = _gps.clock();
+    const GpsFix f = _gps.fix();
+    char buf[48];
+    auto line = [&](const char *s)
+    { _gfx.setCursor(x, y); _gfx.print(s); y += 12; };
+
+    // Clock invalid => the module isn't sending time (check I2C wiring/addr).
+    line(c.valid ? "Clock: VALID" : "Clock: -- no time (check I2C)");
+    if (c.valid)
+    {
+        snprintf(buf, sizeof(buf), " %04d-%02d-%02d  %02d:%02d:%02d",
+                 c.year, c.month, c.day, c.hour, c.minute, c.second);
+        line(buf);
+    }
+    y += 6;
+
+    // Fix invalid but clock valid => talking, but no satellite lock yet.
+    line(f.valid ? "Fix: VALID" : "Fix: NO FIX (needs sky view)");
+    if (f.valid)
+    {
+        snprintf(buf, sizeof(buf), " lat %.6f", f.lat);
+        line(buf);
+        snprintf(buf, sizeof(buf), " lon %.6f", f.lon);
+        line(buf);
+        snprintf(buf, sizeof(buf), " spd %.1f m/s  crs %.0f", f.speed_mps, f.course_deg);
+        line(buf);
+    }
+    y += 6;
+    line("Select: back to menu");
 }
 
 void App::renderMenu()

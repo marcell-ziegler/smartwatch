@@ -4,6 +4,7 @@
 #include <vector>
 #include <optional>
 #include "ClockTime.h"
+#include "hal/IGps.h" // GpsClock (for the Stockholm-time conversion below)
 
 // Denotes wether the stop is mandatory for the given station.
 enum StopType
@@ -223,6 +224,18 @@ std::string toIsoDate(int year, int month, int day);
 // guarantees no conflicting overlaps, so "first match" is unambiguous).
 std::optional<std::string> categoryForDate(const std::vector<SeasonalTimetableRule> &rules,
                                            int year, int month, int day);
+
+// Days in a Gregorian month (accounts for leap years); 0 for an invalid month.
+int daysInMonth(int year, int month);
+
+// Sweden's UTC offset in whole hours for a given UTC date+time: 1 (CET) in
+// winter, 2 (CEST) in summer. EU DST runs from 01:00 UTC on the last Sunday of
+// March to 01:00 UTC on the last Sunday of October.
+int stockholmUtcOffsetHours(int year, int month, int day, int hour);
+
+// Converts a UTC GpsClock to Stockholm local time (CET/CEST with DST), rolling
+// the date over if the offset crosses midnight. Invalid clocks pass through.
+GpsClock utcToStockholm(const GpsClock &utc);
 
 // seasons.csv: each date well-formed and validFrom <= validTo; no exact
 // duplicate rows; and no two rules for the same weekday whose (inclusive) date
