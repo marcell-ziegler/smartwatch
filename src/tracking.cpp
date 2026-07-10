@@ -77,16 +77,65 @@ namespace
     }
 }
 
+namespace
+{
+    // Builds a fresh (no-GPS) TrackingState for a resolved train index,
+    // positioned by clock if `now` falls within its run, else pinned to the
+    // first/last stop. Shared by initialTracking (auto-pick) and
+    // trackingForTrain (manual pick).
+    TrackingState trackingForResolvedIndex(const Shift &shift, const Timetable &tt,
+                                           int chosen, ClockTime now)
+    {
+        TrackingState s;
+        const Train *tr = trainAt(shift, tt, chosen);
+        if (!tr || tr->stops.empty())
+            return s; // invalid
+
+        const int lastIdx = (int)tr->stops.size() - 1;
+        auto st = firstTime(*tr);
+        auto en = lastTime(*tr);
+        const bool pre = st && now < *st;
+        const bool post = en && now > *en;
+
+        s.valid = true;
+        s.activeShiftIdx = chosen;
+        s.activeTrain = tr->number;
+        s.gpsLock = false;
+        s.atStation = false;
+
+        if (post)
+        {
+            s.lastStopIdx = lastIdx;
+            s.nextStopIdx = lastIdx;
+            s.shiftComplete = true;
+            s.segmentProgress = 1.0;
+        }
+        else if (pre)
+        {
+            s.lastStopIdx = 0;
+            s.nextStopIdx = (lastIdx >= 1) ? 1 : 0;
+            s.segmentProgress = 0.0;
+        }
+        else
+        {
+            auto pos = positionByClock(*tr, now);
+            s.lastStopIdx = pos.first;
+            s.nextStopIdx = pos.second;
+            s.segmentProgress = 0.0;
+        }
+
+        s.nextMajorStopIdx = computeNextMajor(*tr, s.nextStopIdx);
+        return s;
+    }
+}
+
 TrackingState initialTracking(const Shift &shift, const Timetable &tt,
                               const std::vector<Station> &stations, ClockTime now)
 {
     (void)stations; // no GPS at init; position comes from the clock
-    TrackingState s;
 
     int chosen = -1;
     int lastResolvable = -1;
-    bool pre = false;
-    bool post = false;
 
     for (int i = 0; i < (int)shift.trainNumbers.size(); ++i)
     {
@@ -101,7 +150,6 @@ TrackingState initialTracking(const Shift &shift, const Timetable &tt,
         if (now <= *en)
         {
             chosen = i;
-            pre = (now < *st);
             break;
         }
     }
@@ -109,43 +157,17 @@ TrackingState initialTracking(const Shift &shift, const Timetable &tt,
     if (chosen == -1)
     {
         if (lastResolvable == -1)
-            return s; // nothing resolvable -> invalid
+            return TrackingState{}; // nothing resolvable -> invalid
         chosen = lastResolvable; // every train already finished today
-        post = true;
     }
 
-    const Train *tr = trainAt(shift, tt, chosen);
-    const int lastIdx = (int)tr->stops.size() - 1;
+    return trackingForResolvedIndex(shift, tt, chosen, now);
+}
 
-    s.valid = true;
-    s.activeShiftIdx = chosen;
-    s.activeTrain = tr->number;
-    s.gpsLock = false;
-    s.atStation = false;
-
-    if (post)
-    {
-        s.lastStopIdx = lastIdx;
-        s.nextStopIdx = lastIdx;
-        s.shiftComplete = true;
-        s.segmentProgress = 1.0;
-    }
-    else if (pre)
-    {
-        s.lastStopIdx = 0;
-        s.nextStopIdx = (lastIdx >= 1) ? 1 : 0;
-        s.segmentProgress = 0.0;
-    }
-    else
-    {
-        auto pos = positionByClock(*tr, now);
-        s.lastStopIdx = pos.first;
-        s.nextStopIdx = pos.second;
-        s.segmentProgress = 0.0;
-    }
-
-    s.nextMajorStopIdx = computeNextMajor(*tr, s.nextStopIdx);
-    return s;
+TrackingState trackingForTrain(const Shift &shift, const Timetable &tt,
+                               int shiftIdx, ClockTime now)
+{
+    return trackingForResolvedIndex(shift, tt, shiftIdx, now);
 }
 
 TrackingState advanceTracking(const TrackingState &prev, const Shift &shift,

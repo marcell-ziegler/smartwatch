@@ -32,6 +32,16 @@ struct TrackingState
 TrackingState initialTracking(const Shift &shift, const Timetable &tt,
                               const std::vector<Station> &stations, ClockTime now);
 
+// Manually select the active train by its index into Shift::trainNumbers
+// (e.g. from a user-driven train picker, when time-of-day auto-detection
+// picked the wrong one). Positions within the train the same way
+// initialTracking() would for a fresh pick: by clock if `now` falls within
+// its run, else pinned to the first/last stop. GPS (advanceTracking) takes
+// over from the next tick. Returns an invalid state if the index doesn't
+// resolve to a train with stops.
+TrackingState trackingForTrain(const Shift &shift, const Timetable &tt,
+                               int shiftIdx, ClockTime now);
+
 // Advance one step. With a valid fix, GPS drives progress: you reach the next
 // stop when inside its radius (monotonic -- jitter can't un-pass a stop), and
 // reaching a train's final stop auto-loads the next train in the shift. Without

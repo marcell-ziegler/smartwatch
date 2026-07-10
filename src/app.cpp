@@ -24,7 +24,7 @@ namespace
     constexpr uint16_t GREEN = 0x47AD;
 
     // Menu actions, in display order.
-    const char *const MENU_ITEMS[] = {"Resume", "Change shift", "GPS / Clock"};
+    const char *const MENU_ITEMS[] = {"Resume", "Change shift", "Select train", "GPS / Clock"};
     constexpr int MENU_COUNT = (int)(sizeof(MENU_ITEMS) / sizeof(MENU_ITEMS[0]));
 
     // Shared list layout.
@@ -216,6 +216,9 @@ void App::handleButton(Button b)
     case AppState::GpsDebug:
         handleGpsDebugButton(b);
         break;
+    case AppState::TrainSelection:
+        handleTrainSelectionButton(b);
+        break;
     }
 }
 
@@ -277,9 +280,21 @@ void App::handleMenuButton(Button b)
     case Button::Select:
         switch (_menuIndex)
         {
-        case 0: setState(AppState::MainView); break;       // Resume
-        case 1: setState(AppState::ShiftSelection); break; // Change shift
-        case 2: setState(AppState::GpsDebug); break;       // GPS / Clock
+        case 0:
+            setState(AppState::MainView);
+            break; // Resume
+        case 1:
+            setState(AppState::ShiftSelection);
+            break; // Change shift
+        case 2:
+            // Start the cursor on the currently active train, if tracking is
+            // valid; otherwise the first train in the shift.
+            _trainIndex = _tracking.valid ? _tracking.activeShiftIdx : 0;
+            setState(AppState::TrainSelection);
+            break; // Select train
+        case 3:
+            setState(AppState::GpsDebug);
+            break; // GPS / Clock
         }
         break;
     default:
@@ -308,6 +323,41 @@ void App::handleGpsDebugButton(Button b)
     setState(AppState::Menu);
 }
 
+void App::handleTrainSelectionButton(Button b)
+{
+    const int n = (int)_selectedShift.trainNumbers.size();
+    switch (b)
+    {
+    case Button::Up:
+        if (n > 0)
+        {
+            _trainIndex = (_trainIndex - 1 + n) % n;
+            _dirty = true;
+        }
+        break;
+    case Button::Down:
+        if (n > 0)
+        {
+            _trainIndex = (_trainIndex + 1) % n;
+            _dirty = true;
+        }
+        break;
+    case Button::Select:
+        if (n > 0)
+        {
+            // Manual override: reposition onto the chosen train by clock (same
+            // placement initialTracking would use for a fresh pick); GPS takes
+            // over from the next advanceTracking() tick.
+            _tracking = trackingForTrain(_selectedShift, _timetable, _trainIndex,
+                                         _gps.clock().timeOfDay());
+            setState(AppState::MainView);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  Rendering
 // ---------------------------------------------------------------------------
@@ -331,6 +381,9 @@ void App::render(uint32_t now_ms)
         break;
     case AppState::GpsDebug:
         renderGpsDebug();
+        break;
+    case AppState::TrainSelection:
+        renderTrainSelection();
         break;
     }
 
@@ -426,6 +479,79 @@ void App::renderShiftSelection()
     }
 
     // More-above / more-below arrows (CP437 up/down triangles).
+    _gfx.setTextSize(1);
+    _gfx.setTextColor(WHITE);
+    if (first > 0)
+    {
+        _gfx.setCursor(w - 12, LIST_TOP - 9);
+        _gfx.write(0x1E);
+    }
+    if (last < n)
+    {
+        _gfx.setCursor(w - 12, _gfx.height() - 9);
+        _gfx.write(0x1F);
+    }
+}
+
+void App::renderTrainSelection()
+{
+    if (!_dirty)
+        return;
+    _dirty = false;
+
+    const int16_t w = _gfx.width();
+    _gfx.fillScreen(BLACK);
+    _gfx.setTextColor(WHITE);
+    _gfx.setTextSize(2);
+    _gfx.setCursor(MARGIN_X, MARGIN_Y);
+    _gfx.print("Select train");
+
+    const int n = (int)_selectedShift.trainNumbers.size();
+    if (n == 0)
+    {
+        _gfx.setTextSize(1);
+        _gfx.setCursor(MARGIN_X, LIST_TOP);
+        _gfx.print("No trains in this shift");
+        return;
+    }
+
+    // Same scrolling-window layout as ShiftSelection.
+    const int rowH = BTN_H + BTN_GAP;
+    int maxVisible = (_gfx.height() - LIST_TOP - 8) / rowH;
+    if (maxVisible < 1)
+        maxVisible = 1;
+
+    int first = 0;
+    if (n > maxVisible)
+    {
+        first = _trainIndex - maxVisible / 2;
+        if (first < 0)
+            first = 0;
+        if (first > n - maxVisible)
+            first = n - maxVisible;
+    }
+    const int last = (first + maxVisible < n) ? first + maxVisible : n;
+
+    int16_t y = LIST_TOP;
+    for (int i = first; i < last; ++i)
+    {
+        const std::string &num = _selectedShift.trainNumbers[i];
+        std::string label = num;
+        if (const Train *tr = _timetable.findTrain(num))
+        {
+            // Route summary from the first/last stop signatures, e.g.
+            // "12 Uo->Frg". Currently-tracked train gets a leading marker.
+            if (!tr->stops.empty())
+                label += " " + tr->stops.front().stationSignature + (char)0x1A /* CP437 -> */ +
+                         tr->stops.back().stationSignature;
+        }
+        if (_tracking.valid && _tracking.activeShiftIdx == i)
+            label = "* " + label;
+        drawButton(_gfx, MARGIN_X, y, w - 2 * MARGIN_X, BTN_H,
+                   toCp437(label).c_str(), i == _trainIndex);
+        y += rowH;
+    }
+
     _gfx.setTextSize(1);
     _gfx.setTextColor(WHITE);
     if (first > 0)
@@ -557,8 +683,8 @@ void App::renderMainView(uint32_t now_ms)
         _gfx.setTextSize(BASE_TEXT_SIZE);
     }
 
-    // Map + tracking recompute + line, throttled to 1 Hz (also on entry).
-    if (full || now_ms - _lastMapDraw >= 1000)
+    // Map + tracking recompute + line, throttled to 0.33 Hz (also on entry).
+    if (full || now_ms - _lastMapDraw >= 3000)
     {
         _lastMapDraw = now_ms;
         if (fix.valid)
@@ -598,9 +724,9 @@ void App::drawMap(double lat, double lon)
     // Background fill first (its own transaction): covers any tile missing from
     // the pre-converted ribbon (loadTile() returns false) so stale pixels from
     // a previous draw don't linger there.
-    _gfx.startWrite();
-    _gfx.writeFillRect(mapX0, mapY0, MAP_W, MAP_H, 0x0000);
-    _gfx.endWrite();
+    // _gfx.startWrite();
+    // _gfx.writeFillRect(mapX0, mapY0, MAP_W, MAP_H, 0x0000);
+    // _gfx.endWrite();
 
     for (int ty = tileYMin; ty <= tileYMax; ++ty)
     {

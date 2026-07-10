@@ -18,8 +18,9 @@ enum class AppState
     ShiftSelection,
     Menu,
     MainView,
-    DataError, // shift/train/timetable data was invalid; prompt for another shift
-    GpsDebug   // live GPS fix + RTC clock readout, for diagnosing the GPS
+    DataError,     // shift/train/timetable data was invalid; prompt for another shift
+    GpsDebug,      // live GPS fix + RTC clock readout, for diagnosing the GPS
+    TrainSelection // manual override of the active train within the current shift
 };
 
 // The application. Shared verbatim between the esp32 and native build
@@ -63,6 +64,11 @@ private:
     // Menu: fixed list of actions.
     int _menuIndex = 0;
 
+    // TrainSelection: manual override of _tracking.activeShiftIdx, since
+    // time-of-day auto-detection (initialTracking) can pick the wrong train.
+    // Indexes into _selectedShift.trainNumbers, same as TrackingState::activeShiftIdx.
+    int _trainIndex = 0;
+
     // DataError: human-readable reason the selected shift couldn't be loaded.
     std::string _errorMessage;
 
@@ -85,6 +91,7 @@ private:
     void handleMainViewButton(Button b);
     void handleDataErrorButton(Button b);
     void handleGpsDebugButton(Button b);
+    void handleTrainSelectionButton(Button b);
 
     // Rendering: paint the current screen (honours _dirty; MainView's map is
     // additionally throttled to 1 Hz).
@@ -95,6 +102,7 @@ private:
     void renderDataError();
     void renderGpsDebug();          // static chrome (on _dirty)
     void drawGpsDebugValues();      // live fix + clock block, refreshed at 1 Hz
+    void renderTrainSelection();
 
     // Draws the live clock. Position depends on state: bottom-right (below the
     // map) in MainView, top-right in the menus. Redrawn once per second.
